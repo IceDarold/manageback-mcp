@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "managebac-mcp"
+version = "0.1.0"
+description = "Config-driven MCP server for ManageBac browser automation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.2,<3",
+  "PyYAML>=6.0,<7",
+  "SQLAlchemy>=2.0,<3",
+  "PyMySQL>=1.1,<2",
+]
+
+[project.optional-dependencies]
+server = [
+  "mcp>=1.6.0,<2",
+  "playwright>=1.50,<2",
+]
+test = [
+  "pytest>=8.0,<9",
+]
+
+[project.scripts]
+managebac-mcp = "managebac_mcp.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

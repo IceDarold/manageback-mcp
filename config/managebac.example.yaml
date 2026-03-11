@@ -1,0 +1,51 @@
+base_url: "https://theislandprivateschool.managebac.com"
+
+auth:
+  login_url: "/login"
+  username_env: "MANAGEBAC_LOGIN"
+  password_env: "MANAGEBAC_PASSWORD"
+
+routes:
+  classes_index: "/student/classes/my"
+  class_page: "/student/classes/{class_id}"
+  class_tasks: "/student/classes/{class_id}/core_tasks"
+  task_page: "/student/classes/{class_id}/core_tasks/{task_id}"
+  task_dropbox: "/student/classes/{class_id}/core_tasks/{task_id}/dropbox"
+  cas_index: "/student/ib/activity/cas"
+  cas_experience: "/student/ib/activity/cas/{experience_id}"
+  cas_reflections: "/student/ib/activity/cas/{experience_id}/reflections"
+
+timeouts_ms:
+  navigation: 30000
+  action: 15000
+  upload: 120000
+
+selectors:
+  login_username:
+    - "input[name='login']"
+    - "input[type='email']"
+  login_password:
+    - "input[name='password']"
+    - "input[type='password']"
+  login_submit:
+    - "input[type='submit']"
+    - "button:has-text('Log in')"
+    - "button[type='submit']"
+  classes_cards:
+    - "a[href*='/student/classes/']"
+  task_links:
+    - "a[href*='/core_tasks/']"
+  dropbox_file_input:
+    - "input[type='file']"
+  dropbox_upload_button:
+    - "button:has-text('Upload Files')"
+  cas_add_experience:
+    - "a:has-text('Add CAS Experience')"
+    - "button:has-text('Add CAS Experience')"
+  cas_add_reflection:
+    - "a:has-text('Add Reflections & Evidence')"
+    - "button:has-text('Add Reflections & Evidence')"
+
+features:
+  startup_sync: true
+  save_artifacts_on_success: false
