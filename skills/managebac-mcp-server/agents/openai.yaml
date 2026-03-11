@@ -1,0 +1,4 @@
+interface:
+  display_name: "ManageBac MCP Server"
+  short_description: "Run and debug ManageBac MCP locally"
+  default_prompt: "Use $managebac-mcp-server to start, validate, and troubleshoot this repository's ManageBac MCP server."
