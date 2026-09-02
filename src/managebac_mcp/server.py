@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import Settings, load_managebac_config, resolve_credentials
+from .config import Settings, load_managebac_config
+from .credentials import parse_basic_auth, require_credentials, set_resolver
 from .db import Database
 from .services import ActionService, ReadService, SyncService
 from .types import ToolResult
@@ -40,8 +41,33 @@ def create_mcp_server():
 
     mcp = FastMCP("managebac-student-mcp")
 
+    def _request_credentials():
+        """Read the current request's Basic-auth ManageBac credentials."""
+        try:
+            ctx = mcp.get_context()
+        except Exception:
+            return None
+        request_context = getattr(ctx, "request_context", None)
+        request = getattr(request_context, "request", None) if request_context else None
+        if request is None:
+            return None
+        try:
+            header = request.headers.get("authorization")
+        except Exception:
+            return None
+        return parse_basic_auth(header)
+
+    set_resolver(_request_credentials)
+
     if cfg.features.startup_sync:
         sync_service.run_startup_sync()
+
+    @mcp.tool(name="whoami")
+    def whoami() -> dict[str, Any]:
+        """Verify the supplied credentials by logging in; used as the connection identity."""
+        username, password = require_credentials(cfg)
+        action_service.login(username, password)
+        return {"id": username, "name": username, "verified": True}
 
     @mcp.tool(name="read_auth_status")
     def read_auth_status() -> dict[str, Any]:
@@ -49,7 +75,7 @@ def create_mcp_server():
 
     @mcp.tool(name="action_login")
     def action_login() -> dict[str, Any]:
-        username, password = resolve_credentials(cfg)
+        username, password = require_credentials(cfg)
         return _serialize(action_service.login(username, password))
 
     @mcp.tool(name="action_startup_sync")
