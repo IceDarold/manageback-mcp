@@ -252,10 +252,9 @@ class PlaywrightBrowserGateway:
             raise AppError(AUTH_FAILED, "Login failed; still on login page")
 
     def _with_authenticated_browser(self, run: Callable[..., T]) -> T:
-        username = os.getenv(self.config.auth.username_env)
-        password = os.getenv(self.config.auth.password_env)
-        if not username or not password:
-            raise AppError(AUTH_FAILED, "Credentials are not set in environment")
+        from .credentials import require_credentials
+
+        username, password = require_credentials(self.config)
 
         def _wrapped(page):
             self._perform_login(page, username, password)
