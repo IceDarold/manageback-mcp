@@ -29,6 +29,7 @@ class RoutesConfig(BaseModel):
     cas_index: str
     cas_experience: str
     cas_reflections: str
+    tasks_and_deadlines: str = "/student/tasks_and_deadlines"
 
 
 class TimeoutConfig(BaseModel):

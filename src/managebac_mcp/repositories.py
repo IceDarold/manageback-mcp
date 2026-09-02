@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Iterable
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from .schema import (
@@ -68,6 +68,9 @@ class ClassRepository:
     def get(self, class_id: int) -> ClassEntity | None:
         return self.session.execute(select(ClassEntity).where(ClassEntity.class_id == class_id)).scalar_one_or_none()
 
+    def max_last_seen(self) -> datetime | None:
+        return self.session.execute(select(func.max(ClassEntity.last_seen_at))).scalar()
+
 
 class TaskRepository:
     def __init__(self, session: Session):
@@ -111,6 +114,11 @@ class TaskRepository:
 
     def get(self, task_id: int) -> TaskEntity | None:
         return self.session.execute(select(TaskEntity).where(TaskEntity.task_id == task_id)).scalar_one_or_none()
+
+    def max_last_seen(self, class_id: int) -> datetime | None:
+        return self.session.execute(
+            select(func.max(TaskEntity.last_seen_at)).where(TaskEntity.class_id == class_id)
+        ).scalar()
 
 
 class SubmissionRepository:
@@ -171,6 +179,9 @@ class CasRepository:
 
     def list_experiences(self) -> list[CasExperience]:
         return list(self.session.execute(select(CasExperience).order_by(CasExperience.title.asc())).scalars().all())
+
+    def max_last_seen(self) -> datetime | None:
+        return self.session.execute(select(func.max(CasExperience.last_seen_at))).scalar()
 
     def get_experience(self, experience_id: int) -> CasExperience | None:
         return self.session.execute(select(CasExperience).where(CasExperience.experience_id == experience_id)).scalar_one_or_none()

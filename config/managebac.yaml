@@ -14,6 +14,7 @@ routes:
   cas_index: "/student/ib/activity/cas"
   cas_experience: "/student/ib/activity/cas/{experience_id}"
   cas_reflections: "/student/ib/activity/cas/{experience_id}/reflections"
+  tasks_and_deadlines: "/student/tasks_and_deadlines"
 
 timeouts_ms:
   navigation: 30000

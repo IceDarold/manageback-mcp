@@ -143,3 +143,12 @@ def test_cas_reflections_actions(tmp_path: Path):
     rows = read.cas_reflections(experience_id)
     assert rows.success
     assert len(rows.data["reflections"]) == 3
+
+
+def test_parse_due_infers_closest_year_and_handles_garbage():
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    d = G._parse_due("Jun 23, 8:25 AM")
+    assert d is not None and (d.month, d.day, d.hour, d.minute) == (6, 23, 8, 25)
+    assert G._parse_due("") is None
+    assert G._parse_due("not a date") is None

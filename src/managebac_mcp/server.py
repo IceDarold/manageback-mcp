@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from .config import Settings, load_managebac_config
@@ -13,6 +14,19 @@ from .types import ToolResult
 
 def _serialize(result: ToolResult) -> dict[str, Any]:
     return result.to_dict()
+
+
+def _is_stale(last_seen, max_age_minutes: int | None) -> bool:
+    """Read-through helper: is cached data older than max_age_minutes?
+
+    max_age_minutes is None -> never refresh (pure cache read). No cached data
+    at all -> always refresh. last_seen is stored in UTC (datetime.utcnow).
+    """
+    if max_age_minutes is None:
+        return False
+    if last_seen is None:
+        return True
+    return datetime.utcnow() - last_seen > timedelta(minutes=max_age_minutes)
 
 
 def create_services() -> tuple[Settings, Database, SyncService, ReadService, ActionService]:
@@ -85,7 +99,9 @@ def create_mcp_server():
         return _serialize(sync_service.run_startup_sync())
 
     @mcp.tool(name="read_classes", annotations=_RO)
-    def read_classes() -> dict[str, Any]:
+    def read_classes(max_age_minutes: int | None = None) -> dict[str, Any]:
+        if _is_stale(read_service.classes_last_seen(), max_age_minutes):
+            action_service.refresh_classes()
         return _serialize(read_service.list_classes())
 
     @mcp.tool(name="action_refresh_classes", annotations=_WR)
@@ -97,7 +113,9 @@ def create_mcp_server():
         return _serialize(read_service.class_details(class_id))
 
     @mcp.tool(name="read_class_tasks", annotations=_RO)
-    def read_class_tasks(class_id: int) -> dict[str, Any]:
+    def read_class_tasks(class_id: int, max_age_minutes: int | None = None) -> dict[str, Any]:
+        if _is_stale(read_service.tasks_last_seen(class_id), max_age_minutes):
+            action_service.refresh_class_tasks(class_id)
         return _serialize(read_service.class_tasks(class_id))
 
     @mcp.tool(name="action_refresh_class_tasks", annotations=_WR)
@@ -125,7 +143,9 @@ def create_mcp_server():
         return _serialize(action_service.retry_submission(task_id=task_id, file_path=file_path))
 
     @mcp.tool(name="read_cas_dashboard", annotations=_RO)
-    def read_cas_dashboard() -> dict[str, Any]:
+    def read_cas_dashboard(max_age_minutes: int | None = None) -> dict[str, Any]:
+        if _is_stale(read_service.cas_last_seen(), max_age_minutes):
+            action_service.refresh_cas()
         return _serialize(read_service.cas_dashboard())
 
     @mcp.tool(name="action_refresh_cas", annotations=_WR)

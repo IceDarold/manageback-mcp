@@ -58,6 +58,18 @@ class ReadService:
     def auth_status(self) -> ToolResult:
         return ToolResult(success=True, message="Auth status can be validated by running action_login", data={})
 
+    def classes_last_seen(self) -> "datetime | None":
+        with self.db.session() as session:
+            return ClassRepository(session).max_last_seen()
+
+    def tasks_last_seen(self, class_id: int) -> "datetime | None":
+        with self.db.session() as session:
+            return TaskRepository(session).max_last_seen(class_id)
+
+    def cas_last_seen(self) -> "datetime | None":
+        with self.db.session() as session:
+            return CasRepository(session).max_last_seen()
+
     def list_classes(self) -> ToolResult:
         with self.db.session() as session:
             classes = ClassRepository(session).list_all()

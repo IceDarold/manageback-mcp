@@ -105,43 +105,100 @@ class PlaywrightBrowserGateway:
     def fetch_classes(self) -> list[ClassRecord]:
         return self._with_authenticated_browser(self._scrape_classes)
 
-    def _scrape_tasks(self, page, class_id: int) -> list[TaskRecord]:
-        page.goto(self.config.route_url("class_tasks", class_id=class_id), timeout=self.config.timeouts_ms.navigation)
-        links = page.locator(",".join(self._selectors("task_links")))
+    # Per-class task lists render nearly empty (a lone task shows only as a nav
+    # tab), so the authoritative source is the cross-class Tasks & Deadlines
+    # page, whose tiles carry the due date and submission status.
+    _DEADLINE_VIEWS = ("upcoming", "overdue", "past")
+
+    @staticmethod
+    def _parse_due(text: str) -> "datetime | None":
+        text = (text or "").strip()
+        if not text:
+            return None
+        now = datetime.now()
+        for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %I:%M %p", "%b %d"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+            if "%Y" in fmt:
+                return parsed
+            # Year-less format: choose the year landing the date closest to now
+            # (handles both overdue past and upcoming future).
+            best = None
+            for year in (now.year - 1, now.year, now.year + 1):
+                try:
+                    candidate = parsed.replace(year=year)
+                except ValueError:
+                    continue
+                if best is None or abs((candidate - now).days) < abs((best - now).days):
+                    best = candidate
+            return best
+        return None
+
+    def _scrape_deadlines(self, page, view: str) -> list[TaskRecord]:
+        url = self.config.build_url(self.config.routes.tasks_and_deadlines) + f"?view={view}"
+        page.goto(url, timeout=self.config.timeouts_ms.navigation)
+        page.wait_for_timeout(500)
+        tiles = page.locator("div.f-tile__body")
         records: list[TaskRecord] = []
-        for i in range(links.count()):
-            href = links.nth(i).get_attribute("href") or ""
+        for i in range(tiles.count()):
+            tile = tiles.nth(i)
+            link = tile.locator("a.f-tile__title-link").first
+            if link.count() == 0:
+                continue
+            href = link.get_attribute("href") or ""
             m = re.search(r"/student/classes/(\d+)/core_tasks/(\d+)", href)
             if not m:
                 continue
-            task_id = int(m.group(2))
-            title = links.nth(i).inner_text().strip() or f"Task {task_id}"
-            url = self.config.build_url(href)
+            class_id, task_id = int(m.group(1)), int(m.group(2))
+            title = link.inner_text().strip() or f"Task {task_id}"
+            due_text = ""
+            clock = tile.locator("span:has(svg.fi-clock)").first
+            if clock.count() > 0:
+                due_text = clock.inner_text().strip()
+            status = None
+            badge = tile.locator(".badge[data-bs-title]").first
+            if badge.count() > 0:
+                label = badge.locator(".badge-label").first
+                status = ((label.inner_text().strip() if label.count() > 0 else "")
+                          or (badge.get_attribute("data-bs-title") or "")).strip() or None
             dropbox_url = self.config.route_url("task_dropbox", class_id=class_id, task_id=task_id)
-            raw = f"{class_id}:{task_id}:{title}:{url}:{dropbox_url}"
+            raw = f"{class_id}:{task_id}:{title}:{due_text}:{status}"
             records.append(
                 TaskRecord(
                     task_id=task_id,
                     class_id=class_id,
                     title=title,
-                    due_at=None,
-                    status=None,
-                    url=url,
+                    due_at=self._parse_due(due_text),
+                    status=status,
+                    url=self.config.build_url(href),
                     dropbox_url=dropbox_url,
                     raw_hash=self._hash(raw),
                 )
             )
-        return dedupe_tasks(records)
+        return records
+
+    def _scrape_all_tasks(self, page) -> list[TaskRecord]:
+        seen: dict[int, TaskRecord] = {}
+        for view in self._DEADLINE_VIEWS:
+            for rec in self._scrape_deadlines(page, view):
+                seen.setdefault(rec.task_id, rec)
+        return list(seen.values())
 
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]:
-        return self._with_authenticated_browser(lambda page: self._scrape_tasks(page, class_id))
+        return self._with_authenticated_browser(
+            lambda page: [t for t in self._scrape_all_tasks(page) if t.class_id == class_id]
+        )
 
     def collect_startup_data(self) -> "StartupData":
-        """Log in once and scrape classes, their tasks, and CAS in one session."""
+        """Log in once and scrape classes, all tasks, and CAS in one session."""
 
         def _run(page):
             classes = self._scrape_classes(page)
-            tasks_by_class = {cls.class_id: self._scrape_tasks(page, cls.class_id) for cls in classes}
+            tasks_by_class: dict[int, list[TaskRecord]] = {}
+            for rec in self._scrape_all_tasks(page):
+                tasks_by_class.setdefault(rec.class_id, []).append(rec)
             cas = self._scrape_cas(page)
             return classes, tasks_by_class, cas
 
