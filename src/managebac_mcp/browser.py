@@ -246,10 +246,15 @@ class PlaywrightBrowserGateway:
         self._fill_first(page, self._selectors("login_username"), username)
         self._fill_first(page, self._selectors("login_password"), password)
         self._click_first(page, self._selectors("login_submit"))
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
 
-        if "login" in page.url and "/student" not in page.url:
-            raise AppError(AUTH_FAILED, "Login failed; still on login page")
+        # Verify positively: a real student session can open the classes page.
+        # Bad credentials leave ManageBac on a login/sign-in page instead, which
+        # never contains the "/student" path.
+        page.goto(self.config.route_url("classes_index"), timeout=self.config.timeouts_ms.navigation)
+        page.wait_for_timeout(500)
+        if "/student" not in page.url.lower():
+            raise AppError(AUTH_FAILED, "Login failed; ManageBac did not grant a student session (check login/password)")
 
     def _with_authenticated_browser(self, run: Callable[..., T]) -> T:
         from .credentials import require_credentials
