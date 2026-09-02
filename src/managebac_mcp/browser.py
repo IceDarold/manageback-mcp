@@ -30,6 +30,10 @@ class UploadOutcome:
     html_path: str | None = None
 
 
+# classes, {class_id: tasks}, cas experiences -- everything one sync collects.
+StartupData = tuple[list[ClassRecord], dict[int, list[TaskRecord]], list[CasExperienceRecord]]
+
+
 class BrowserGateway(Protocol):
     def login(self, username: str, password: str) -> None: ...
 
@@ -38,6 +42,8 @@ class BrowserGateway(Protocol):
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]: ...
 
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]: ...
+
+    def collect_startup_data(self) -> "StartupData": ...
 
     def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome: ...
 
@@ -73,91 +79,102 @@ class PlaywrightBrowserGateway:
 
         self._with_browser(_run)
 
-    def fetch_classes(self) -> list[ClassRecord]:
-        def _run(page):
-            page.goto(self.config.route_url("classes_index"), timeout=self.config.timeouts_ms.navigation)
-            links = page.locator(",".join(self._selectors("classes_cards")))
-            records: list[ClassRecord] = []
-            for i in range(links.count()):
-                href = links.nth(i).get_attribute("href") or ""
-                m = re.search(r"/student/classes/(\d+)", href)
-                if not m:
-                    continue
-                class_id = int(m.group(1))
-                title = links.nth(i).inner_text().strip() or f"Class {class_id}"
-                url = self.config.build_url(href)
-                records.append(
-                    ClassRecord(
-                        class_id=class_id,
-                        title=title,
-                        teacher=None,
-                        url=url,
-                        raw_hash=self._hash(f"{class_id}:{title}:{url}"),
-                    )
+    def _scrape_classes(self, page) -> list[ClassRecord]:
+        page.goto(self.config.route_url("classes_index"), timeout=self.config.timeouts_ms.navigation)
+        links = page.locator(",".join(self._selectors("classes_cards")))
+        records: list[ClassRecord] = []
+        for i in range(links.count()):
+            href = links.nth(i).get_attribute("href") or ""
+            m = re.search(r"/student/classes/(\d+)", href)
+            if not m:
+                continue
+            class_id = int(m.group(1))
+            title = links.nth(i).inner_text().strip() or f"Class {class_id}"
+            url = self.config.build_url(href)
+            records.append(
+                ClassRecord(
+                    class_id=class_id,
+                    title=title,
+                    teacher=None,
+                    url=url,
+                    raw_hash=self._hash(f"{class_id}:{title}:{url}"),
                 )
-            return dedupe_classes(records)
+            )
+        return dedupe_classes(records)
 
-        return self._with_authenticated_browser(_run)
+    def fetch_classes(self) -> list[ClassRecord]:
+        return self._with_authenticated_browser(self._scrape_classes)
+
+    def _scrape_tasks(self, page, class_id: int) -> list[TaskRecord]:
+        page.goto(self.config.route_url("class_tasks", class_id=class_id), timeout=self.config.timeouts_ms.navigation)
+        links = page.locator(",".join(self._selectors("task_links")))
+        records: list[TaskRecord] = []
+        for i in range(links.count()):
+            href = links.nth(i).get_attribute("href") or ""
+            m = re.search(r"/student/classes/(\d+)/core_tasks/(\d+)", href)
+            if not m:
+                continue
+            task_id = int(m.group(2))
+            title = links.nth(i).inner_text().strip() or f"Task {task_id}"
+            url = self.config.build_url(href)
+            dropbox_url = self.config.route_url("task_dropbox", class_id=class_id, task_id=task_id)
+            raw = f"{class_id}:{task_id}:{title}:{url}:{dropbox_url}"
+            records.append(
+                TaskRecord(
+                    task_id=task_id,
+                    class_id=class_id,
+                    title=title,
+                    due_at=None,
+                    status=None,
+                    url=url,
+                    dropbox_url=dropbox_url,
+                    raw_hash=self._hash(raw),
+                )
+            )
+        return dedupe_tasks(records)
 
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]:
+        return self._with_authenticated_browser(lambda page: self._scrape_tasks(page, class_id))
+
+    def collect_startup_data(self) -> "StartupData":
+        """Log in once and scrape classes, their tasks, and CAS in one session."""
+
         def _run(page):
-            page.goto(self.config.route_url("class_tasks", class_id=class_id), timeout=self.config.timeouts_ms.navigation)
-            links = page.locator(",".join(self._selectors("task_links")))
-            records: list[TaskRecord] = []
-            for i in range(links.count()):
-                href = links.nth(i).get_attribute("href") or ""
-                m = re.search(r"/student/classes/(\d+)/core_tasks/(\d+)", href)
-                if not m:
-                    continue
-                task_id = int(m.group(2))
-                title = links.nth(i).inner_text().strip() or f"Task {task_id}"
-                url = self.config.build_url(href)
-                dropbox_url = self.config.route_url("task_dropbox", class_id=class_id, task_id=task_id)
-                raw = f"{class_id}:{task_id}:{title}:{url}:{dropbox_url}"
-                records.append(
-                    TaskRecord(
-                        task_id=task_id,
-                        class_id=class_id,
-                        title=title,
-                        due_at=None,
-                        status=None,
-                        url=url,
-                        dropbox_url=dropbox_url,
-                        raw_hash=self._hash(raw),
-                    )
-                )
-            return dedupe_tasks(records)
+            classes = self._scrape_classes(page)
+            tasks_by_class = {cls.class_id: self._scrape_tasks(page, cls.class_id) for cls in classes}
+            cas = self._scrape_cas(page)
+            return classes, tasks_by_class, cas
 
         return self._with_authenticated_browser(_run)
+
+    def _scrape_cas(self, page) -> list[CasExperienceRecord]:
+        page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)
+        links = page.locator("a[href*='/student/ib/activity/cas/']")
+        records: list[CasExperienceRecord] = []
+        for i in range(links.count()):
+            href = links.nth(i).get_attribute("href") or ""
+            m = re.search(r"/student/ib/activity/cas/(\d+)$", href)
+            if not m:
+                continue
+            eid = int(m.group(1))
+            title = links.nth(i).inner_text().strip() or f"CAS {eid}"
+            url = self.config.build_url(href)
+            records.append(
+                CasExperienceRecord(
+                    experience_id=eid,
+                    title=title,
+                    status=None,
+                    start_date=None,
+                    end_date=None,
+                    hours=None,
+                    url=url,
+                    raw_hash=self._hash(f"{eid}:{title}:{url}"),
+                )
+            )
+        return dedupe_cas(records)
 
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]:
-        def _run(page):
-            page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)
-            links = page.locator("a[href*='/student/ib/activity/cas/']")
-            records: list[CasExperienceRecord] = []
-            for i in range(links.count()):
-                href = links.nth(i).get_attribute("href") or ""
-                m = re.search(r"/student/ib/activity/cas/(\d+)$", href)
-                if not m:
-                    continue
-                eid = int(m.group(1))
-                title = links.nth(i).inner_text().strip() or f"CAS {eid}"
-                url = self.config.build_url(href)
-                records.append(
-                    CasExperienceRecord(
-                        experience_id=eid,
-                        title=title,
-                        status=None,
-                        start_date=None,
-                        end_date=None,
-                        hours=None,
-                        url=url,
-                        raw_hash=self._hash(f"{eid}:{title}:{url}"),
-                    )
-                )
-            return dedupe_cas(records)
-
-        return self._with_authenticated_browser(_run)
+        return self._with_authenticated_browser(self._scrape_cas)
 
     def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome:
         if not file_path.exists():

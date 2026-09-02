@@ -48,6 +48,11 @@ class FakeBrowser:
             )
         ]
 
+    def collect_startup_data(self):
+        classes = self.fetch_classes()
+        tasks_by_class = {cls.class_id: self.fetch_tasks(cls.class_id) for cls in classes}
+        return classes, tasks_by_class, self.fetch_cas_experiences()
+
     def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None):
         return UploadOutcome(status="submitted", message="ok", screenshot_path="artifacts/a.png", html_path="artifacts/a.html")
 
