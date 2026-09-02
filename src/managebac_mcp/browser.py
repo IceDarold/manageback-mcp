@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -263,10 +263,15 @@ class PlaywrightBrowserGateway:
         self._fill_first(page, self._selectors("login_username"), username)
         self._fill_first(page, self._selectors("login_password"), password)
         self._click_first(page, self._selectors("login_submit"))
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
 
-        if "login" in page.url and "/student" not in page.url:
-            raise AppError(AUTH_FAILED, "Login failed; still on login page")
+        # Verify positively: a real student session can open the classes page.
+        # Bad credentials leave ManageBac on a login/sign-in page instead, which
+        # never contains the "/student" path.
+        page.goto(self.config.route_url("classes_index"), timeout=self.config.timeouts_ms.navigation)
+        page.wait_for_timeout(500)
+        if "/student" not in page.url.lower():
+            raise AppError(AUTH_FAILED, "Login failed; ManageBac did not grant a student session (check login/password)")
 
     def _with_authenticated_browser(self, run: Callable[..., T]) -> T:
         from .credentials import require_credentials
@@ -280,20 +285,27 @@ class PlaywrightBrowserGateway:
         return self._with_browser(_wrapped)
 
     def _with_browser(self, run: Callable[..., T]) -> T:
-        try:
-            from playwright.sync_api import sync_playwright
-        except Exception as exc:
-            raise AppError(AUTH_FAILED, "Playwright is not installed. Install with `pip install .[server]`") from exc
-
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
+        def _job() -> T:
             try:
-                return run(page)
-            finally:
-                context.close()
-                browser.close()
+                from playwright.sync_api import sync_playwright
+            except Exception as exc:
+                raise AppError(AUTH_FAILED, "Playwright is not installed. Install with `pip install .[server]`") from exc
+
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                context = browser.new_context()
+                page = context.new_page()
+                try:
+                    return run(page)
+                finally:
+                    context.close()
+                    browser.close()
+
+        # The MCP server runs tools inside an asyncio loop, where Playwright's
+        # sync API refuses to start. Run the whole browser session in a
+        # dedicated worker thread that has no running event loop.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_job).result()
 
     def _first_locator(self, page, selectors: list[str]):
         for selector in selectors:
