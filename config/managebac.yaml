@@ -47,5 +47,5 @@ selectors:
     - "button:has-text('Add Reflections & Evidence')"
 
 features:
-  startup_sync: true
+  startup_sync: false
   save_artifacts_on_success: false
