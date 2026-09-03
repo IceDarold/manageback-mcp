@@ -105,10 +105,7 @@ class PlaywrightBrowserGateway:
         return dedupe_classes(records)
 
     def _probe_dump(self, page) -> None:
-        """TEMP: capture pages needed to add the timetable + attachments."""
-        import json as _json
-        import re as _re
-
+        """TEMP: capture the timetable views needed to model lessons."""
         out = Path("/var/lib/manageback-mcp/probe")
         out.mkdir(parents=True, exist_ok=True)
 
@@ -125,28 +122,14 @@ class PlaywrightBrowserGateway:
                 return ""
 
         base = self.config.base_url
-        grab("timetables", base + "/student/timetables")
-        grab("calendar", base + "/student/calendar")
-        grab("classes_index", self.config.route_url("classes_index"))
-
-
-        # Every nav/sidebar link, so the timetable route reveals itself instead
-        # of being guessed.
-        try:
-            page.goto(self.config.route_url("classes_index"), timeout=self.config.timeouts_ms.navigation)
-            page.wait_for_timeout(1000)
-            links = page.eval_on_selector_all(
-                "a[href]", "els => els.map(e => [e.getAttribute('href'), (e.innerText||'').trim()])"
-            )
-            (out / "links.json").write_text(_json.dumps(links, ensure_ascii=False, indent=1), encoding="utf-8")
-        except Exception as exc:
-            (out / "links.error").write_text(repr(exc), encoding="utf-8")
-
-        # One real task page, for the attachment markup.
-        html = grab("deadlines_for_task", deadlines + "?view=past")
-        m = _re.search(r"/student/classes/(\d+)/core_tasks/(\d+)", html or "")
-        if m:
-            grab("task_page", self.config.build_url(m.group(0)))
+        grab("tt_weekly", base + "/student/timetables/weekly?start_date=2026-08-31")
+        grab("tt_weekly_next", base + "/student/timetables/weekly?start_date=2026-09-07")
+        grab("tt_three", base + "/student/timetables/three_days?start_date=2026-09-03")
+        grab(
+            "tt_popup",
+            base + "/student/timetables/popup?class_lesson_period_id=5411674"
+                   "&date=2026-09-02&ib_class_id=12820005&timetable_user_id=15616945",
+        )
 
     def fetch_classes(self) -> list[ClassRecord]:
         def _run(page):
