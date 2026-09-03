@@ -74,13 +74,13 @@ class SyncService:
                 return ToolResult(success=False, message=exc.message, error_code=exc.code, data={"sync_run_id": run.id})
 
 
-    def refresh_deadlines(self, views: tuple[str, ...] | None = None) -> ToolResult:
+    def refresh_deadlines(self, views: tuple[str, ...] | None = None, max_pages: int | None = None) -> ToolResult:
         """Refresh just the deadline views -- what read_agenda needs, one login."""
         with self.db.session() as session:
             sync_repo = SyncRunRepository(session)
             run = sync_repo.start()
             try:
-                tasks = self.browser.fetch_deadlines(views)
+                tasks = self.browser.fetch_deadlines(views, max_pages)
                 count = TaskRepository(session).upsert_many(tasks)
                 sync_repo.finish(run, "success")
                 return ToolResult(success=True, message=f"Refreshed {count} task(s)", data={"tasks": count})

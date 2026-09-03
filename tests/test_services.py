@@ -34,7 +34,7 @@ class FakeBrowser:
             )
         ]
 
-    def fetch_deadlines(self, views=None):
+    def fetch_deadlines(self, views=None, max_pages=None):
         out = []
         for cls in self.fetch_classes():
             out.extend(self.fetch_tasks(cls.class_id))
@@ -452,9 +452,9 @@ def test_refresh_deadlines_skips_the_past_view_and_upserts():
     seen: list = []
 
     class Recording(FakeBrowser):
-        def fetch_deadlines(self, views=None):
+        def fetch_deadlines(self, views=None, max_pages=None):
             seen.append(views)
-            return FakeBrowser.fetch_deadlines(self, views)
+            return FakeBrowser.fetch_deadlines(self, views, max_pages)
 
     browser = Recording()
     SyncService(db, browser).run_startup_sync()   # seed classes for the FK
@@ -470,3 +470,39 @@ def test_agenda_views_constant_excludes_past():
 
     assert G._AGENDA_VIEWS == ("upcoming", "overdue")
     assert "past" in G._DEADLINE_VIEWS
+
+
+def test_scrape_deadlines_respects_the_page_cap():
+    """The interactive path must stop at max_pages even when more pages exist."""
+    import pathlib
+
+    from managebac_mcp.browser import PlaywrightBrowserGateway
+    from managebac_mcp.config import load_managebac_config
+
+    config = load_managebac_config(pathlib.Path("config/managebac.yaml"))
+
+    class FakePage:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        def goto(self, url, timeout=None):
+            self.urls.append(url)
+
+        def wait_for_selector(self, selector, timeout=None):
+            return None
+
+    class Gateway(PlaywrightBrowserGateway):
+        def _parse_deadline_tiles(self, page):
+            n = len(page.urls)
+            return [
+                TaskRecord(task_id=n, class_id=1, title=f"T{n}", due_at=None, status=None,
+                           url="u", dropbox_url="d", raw_hash="r")
+            ]
+
+    gw = Gateway(config)
+    page = FakePage()
+    records = gw._scrape_deadlines(page, "upcoming", max_pages=3)
+
+    # Every page yields something new, so only the cap can stop the walk.
+    assert len(page.urls) == 3
+    assert sorted(r.task_id for r in records) == [1, 2, 3]

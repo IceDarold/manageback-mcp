@@ -48,7 +48,9 @@ class BrowserGateway(Protocol):
 
     def fetch_task_details(self, task_url: str) -> dict: ...
 
-    def fetch_deadlines(self, views: "tuple[str, ...] | None" = None) -> list[TaskRecord]: ...
+    def fetch_deadlines(
+        self, views: "tuple[str, ...] | None" = None, max_pages: int | None = None
+    ) -> list[TaskRecord]: ...
 
     def fetch_timetable(self, start_dates: list[str]) -> list[LessonRecord]: ...
 
@@ -191,13 +193,25 @@ class PlaywrightBrowserGateway:
     # repeated ids stop the loop on page 2 rather than spinning.
     _MAX_DEADLINE_PAGES = 25
 
-    def _scrape_deadlines(self, page, view: str) -> list[TaskRecord]:
+    def _await_tiles(self, page, selector: str, timeout_ms: int = 3000) -> None:
+        """Wait for content instead of sleeping a fixed slice on every page.
+
+        A page with nothing on it (an empty view, or one past the last) simply
+        times out, which is the signal to stop -- so the miss is never an error.
+        """
+        try:
+            page.wait_for_selector(selector, timeout=timeout_ms)
+        except Exception:
+            pass
+
+    def _scrape_deadlines(self, page, view: str, max_pages: int | None = None) -> list[TaskRecord]:
         base = self.config.build_url(self.config.routes.tasks_and_deadlines) + f"?view={view}"
+        limit = min(max_pages or self._MAX_DEADLINE_PAGES, self._MAX_DEADLINE_PAGES)
         collected: dict[int, TaskRecord] = {}
-        for page_no in range(1, self._MAX_DEADLINE_PAGES + 1):
+        for page_no in range(1, limit + 1):
             url = base if page_no == 1 else f"{base}&page={page_no}"
             page.goto(url, timeout=self.config.timeouts_ms.navigation)
-            page.wait_for_timeout(500)
+            self._await_tiles(page, "div.f-tile__body")
             fresh = [r for r in self._parse_deadline_tiles(page) if r.task_id not in collected]
             if not fresh:
                 break
@@ -209,17 +223,29 @@ class PlaywrightBrowserGateway:
     # answer "what is due", so the agenda refresh asks for the other two only.
     _AGENDA_VIEWS = ("upcoming", "overdue")
 
-    def _scrape_all_tasks(self, page, views: "tuple[str, ...] | None" = None) -> list[TaskRecord]:
+    def _scrape_all_tasks(
+        self, page, views: "tuple[str, ...] | None" = None, max_pages: int | None = None
+    ) -> list[TaskRecord]:
         seen: dict[int, TaskRecord] = {}
         for view in views or self._DEADLINE_VIEWS:
-            for rec in self._scrape_deadlines(page, view):
+            for rec in self._scrape_deadlines(page, view, max_pages):
                 seen.setdefault(rec.task_id, rec)
         return list(seen.values())
 
-    def fetch_deadlines(self, views: "tuple[str, ...] | None" = None) -> list[TaskRecord]:
+    # Deadline views come back sorted by date, so the first pages hold the
+    # soonest work -- which is all an interactive "what is due?" needs. The
+    # exhaustive crawl stays in the full startup sync, which has no client
+    # waiting on it.
+    _AGENDA_MAX_PAGES = 5
+
+    def fetch_deadlines(
+        self, views: "tuple[str, ...] | None" = None, max_pages: int | None = None
+    ) -> list[TaskRecord]:
         """Scrape only the deadline views, skipping classes, CAS and the timetable."""
         return self._with_authenticated_browser(
-            lambda page: self._scrape_all_tasks(page, views or self._AGENDA_VIEWS)
+            lambda page: self._scrape_all_tasks(
+                page, views or self._AGENDA_VIEWS, max_pages or self._AGENDA_MAX_PAGES
+            )
         )
 
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]:
@@ -286,7 +312,7 @@ class PlaywrightBrowserGateway:
         """Read one week of the rotation timetable starting at start_date."""
         url = self.config.build_url(self.config.routes.timetable_weekly) + f"?start_date={start_date}"
         page.goto(url, timeout=self.config.timeouts_ms.navigation)
-        page.wait_for_timeout(800)
+        self._await_tiles(page, "#timetable table", timeout_ms=5000)
 
         table = page.locator("#timetable table").first
         if table.count() == 0:
@@ -380,7 +406,7 @@ class PlaywrightBrowserGateway:
 
     def _scrape_cas(self, page) -> list[CasExperienceRecord]:
         page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)
-        page.wait_for_timeout(500)
+        self._await_tiles(page, "div.activity-tile")
 
         # Each experience is a card carrying its approval flag, total hours and
         # date range; the bare-link fallback below keeps the sync alive if the
