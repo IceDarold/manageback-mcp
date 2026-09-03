@@ -87,19 +87,32 @@ def create_mcp_server():
 
     @mcp.tool(name="read_auth_status", annotations=_RO)
     def read_auth_status() -> dict[str, Any]:
+        """Report whether the connection is usable. Cheap; does not log in."""
         return _serialize(read_service.auth_status())
 
     @mcp.tool(name="action_login", annotations=_RO)
     def action_login() -> dict[str, Any]:
+        """Force a ManageBac login to check the stored credentials. Rarely needed --
+        every other tool logs in on its own when it has to."""
         username, password = require_credentials(cfg)
         return _serialize(action_service.login(username, password))
 
     @mcp.tool(name="action_startup_sync", annotations=_WR)
     def action_startup_sync() -> dict[str, Any]:
+        """Re-scrape everything (classes, all tasks, CAS) in one login and refill the cache.
+
+        Advanced/maintenance: the read_* tools refresh themselves via max_age_minutes,
+        so prefer read_agenda. Use this only to force a full rebuild of the cache.
+        """
         return _serialize(sync_service.run_startup_sync())
 
     @mcp.tool(name="read_classes", annotations=_RO)
     def read_classes(max_age_minutes: int | None = None) -> dict[str, Any]:
+        """List the student's classes (id, title, teacher, url).
+
+        Auto-refreshes when the cache is older than max_age_minutes (default: cache only).
+        To answer "what is due?", prefer read_agenda -- it already names the class.
+        """
         if _is_stale(read_service.classes_last_seen(), max_age_minutes):
             action_service.refresh_classes()
         return _serialize(read_service.list_classes())
@@ -128,24 +141,39 @@ def create_mcp_server():
 
     @mcp.tool(name="action_refresh_classes", annotations=_WR)
     def action_refresh_classes() -> dict[str, Any]:
+        """Force a re-scrape of the class list. Advanced: read_classes(max_age_minutes=0)
+        does the same thing and returns the data."""
         return _serialize(action_service.refresh_classes())
 
     @mcp.tool(name="read_class_details", annotations=_RO)
     def read_class_details(class_id: int) -> dict[str, Any]:
+        """Return one class's title, teacher and url, by class id (see read_classes)."""
         return _serialize(read_service.class_details(class_id))
 
     @mcp.tool(name="read_class_tasks", annotations=_RO)
     def read_class_tasks(class_id: int, max_age_minutes: int | None = None) -> dict[str, Any]:
+        """Tasks for ONE class, sorted by due date, from the cache.
+
+        Auto-refreshes when older than max_age_minutes (default: cache only). For
+        "what's due" across all classes, or filtering by subject name instead of a
+        class id, use read_agenda instead.
+        """
         if _is_stale(read_service.tasks_last_seen(class_id), max_age_minutes):
             action_service.refresh_class_tasks(class_id)
         return _serialize(read_service.class_tasks(class_id))
 
     @mcp.tool(name="action_refresh_class_tasks", annotations=_WR)
     def action_refresh_class_tasks(class_id: int) -> dict[str, Any]:
+        """Force a re-scrape of one class's tasks. Advanced: prefer
+        read_class_tasks(class_id, max_age_minutes=0), which also returns the data."""
         return _serialize(action_service.refresh_class_tasks(class_id))
 
     @mcp.tool(name="read_task", annotations=_RO)
     def read_task(task_id: int) -> dict[str, Any]:
+        """Cached facts about one task: title, class, due date, status, urls.
+
+        For the teacher's actual instructions and submission state, use read_task_details.
+        """
         return _serialize(read_service.task_details(task_id))
 
     @mcp.tool(name="read_task_details", annotations=_RO)
@@ -162,6 +190,8 @@ def create_mcp_server():
 
     @mcp.tool(name="read_task_dropbox", annotations=_RO)
     def read_task_dropbox(task_id: int) -> dict[str, Any]:
+        """Return the dropbox (submission) URL for a task. The submit tools use it
+        automatically, so you rarely need this directly."""
         return _serialize(read_service.task_dropbox(task_id))
 
     @mcp.tool(name="action_submit_task_file", annotations=_WR)
@@ -184,56 +214,78 @@ def create_mcp_server():
 
     @mcp.tool(name="read_submission_result", annotations=_RO)
     def read_submission_result(task_id: int) -> dict[str, Any]:
+        """Return the most recent submission this connector made for a task
+        (file name, time, resulting status). Use it to confirm an upload landed."""
         return _serialize(read_service.submission_result(task_id))
 
     @mcp.tool(name="action_retry_submission", annotations=_WR)
     def action_retry_submission(task_id: int, file_path: str) -> dict[str, Any]:
+        """Re-upload a file to a task's dropbox after a failed attempt (server-side path)."""
         return _serialize(action_service.retry_submission(task_id=task_id, file_path=file_path))
 
     @mcp.tool(name="read_cas_dashboard", annotations=_RO)
     def read_cas_dashboard(max_age_minutes: int | None = None) -> dict[str, Any]:
+        """All CAS experiences with approval status, hours, and start/end dates.
+
+        Answers "how many CAS hours do I have?" -- sum the hours field. Auto-refreshes
+        when the cache is older than max_age_minutes (default: cache only).
+        """
         if _is_stale(read_service.cas_last_seen(), max_age_minutes):
             action_service.refresh_cas()
         return _serialize(read_service.cas_dashboard())
 
     @mcp.tool(name="action_refresh_cas", annotations=_WR)
     def action_refresh_cas() -> dict[str, Any]:
+        """Force a re-scrape of CAS. Advanced: prefer
+        read_cas_dashboard(max_age_minutes=0), which also returns the data."""
         return _serialize(action_service.refresh_cas())
 
     @mcp.tool(name="read_cas_experience", annotations=_RO)
     def read_cas_experience(experience_id: int) -> dict[str, Any]:
+        """One CAS experience by id: title, status, hours, dates (see read_cas_dashboard)."""
         return _serialize(read_service.cas_experience(experience_id))
 
     @mcp.tool(name="action_create_cas_experience", annotations=_WR)
     def action_create_cas_experience(payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a CAS experience. payload takes "name" and "description"; it only fills
+        the form unless you also pass "submit": true."""
         return _serialize(action_service.create_cas_experience(payload))
 
     @mcp.tool(name="read_cas_reflections", annotations=_RO)
     def read_cas_reflections(experience_id: int) -> dict[str, Any]:
+        """Reflections this connector has added to a CAS experience."""
         return _serialize(read_service.cas_reflections(experience_id))
 
     @mcp.tool(name="action_add_reflection_journal", annotations=_WR)
     def action_add_reflection_journal(experience_id: int, text: str, outcomes: list[str]) -> dict[str, Any]:
+        """Add a written journal reflection to a CAS experience.
+
+        outcomes are IB learning outcome names, e.g. ["Awareness", "Collaboration"].
+        """
         return _serialize(action_service.add_reflection_journal(experience_id=experience_id, text=text, outcomes=outcomes))
 
     @mcp.tool(name="action_add_reflection_file", annotations=_WR)
     def action_add_reflection_file(experience_id: int, file_path: str, outcomes: list[str]) -> dict[str, Any]:
+        """Attach a file as evidence to a CAS experience (server-side path)."""
         return _serialize(action_service.add_reflection_file(experience_id=experience_id, file_path=file_path, outcomes=outcomes))
 
     @mcp.tool(name="action_add_reflection_video", annotations=_WR)
     def action_add_reflection_video(experience_id: int, video_url: str, outcomes: list[str]) -> dict[str, Any]:
+        """Attach a video URL as evidence to a CAS experience."""
         return _serialize(
             action_service.add_reflection_link(experience_id=experience_id, reflection_type="video", url=video_url, outcomes=outcomes)
         )
 
     @mcp.tool(name="action_add_reflection_website", annotations=_WR)
     def action_add_reflection_website(experience_id: int, website_url: str, outcomes: list[str]) -> dict[str, Any]:
+        """Attach a website URL as evidence to a CAS experience."""
         return _serialize(
             action_service.add_reflection_link(experience_id=experience_id, reflection_type="website", url=website_url, outcomes=outcomes)
         )
 
     @mcp.tool(name="action_add_reflection_photos", annotations=_WR)
     def action_add_reflection_photos(experience_id: int, photos_url: str, outcomes: list[str]) -> dict[str, Any]:
+        """Attach a photo-album URL as evidence to a CAS experience."""
         return _serialize(
             action_service.add_reflection_link(experience_id=experience_id, reflection_type="photos", url=photos_url, outcomes=outcomes)
         )
