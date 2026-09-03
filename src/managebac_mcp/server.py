@@ -99,7 +99,8 @@ def create_mcp_server():
 
     @mcp.tool(name="action_startup_sync", annotations=_WR)
     def action_startup_sync() -> dict[str, Any]:
-        """Re-scrape everything (classes, all tasks, CAS) in one login and refill the cache.
+        """Re-scrape everything (classes, all tasks, CAS, this week's and next week's
+        lessons) in one login and refill the cache.
 
         Advanced/maintenance: the read_* tools refresh themselves via max_age_minutes,
         so prefer read_agenda. Use this only to force a full rebuild of the cache.

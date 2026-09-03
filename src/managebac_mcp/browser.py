@@ -6,7 +6,7 @@ import concurrent.futures
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Protocol, TypeVar
 
@@ -30,8 +30,11 @@ class UploadOutcome:
     html_path: str | None = None
 
 
-# classes, {class_id: tasks}, cas experiences -- everything one sync collects.
-StartupData = tuple[list[ClassRecord], dict[int, list[TaskRecord]], list[CasExperienceRecord]]
+# classes, {class_id: tasks}, cas experiences, lessons -- one sync collects all
+# of it under a single login.
+StartupData = tuple[
+    list[ClassRecord], dict[int, list[TaskRecord]], list[CasExperienceRecord], list[LessonRecord]
+]
 
 
 class BrowserGateway(Protocol):
@@ -221,7 +224,18 @@ class PlaywrightBrowserGateway:
             for rec in self._scrape_all_tasks(page):
                 tasks_by_class.setdefault(rec.class_id, []).append(rec)
             cas = self._scrape_cas(page)
-            return classes, tasks_by_class, cas
+
+            # This week and next, so "what do I have tomorrow" works straight
+            # after a sync even across a week boundary.
+            today = date_cls.today()
+            monday = today - timedelta(days=today.weekday())
+            lessons: dict[tuple[str, str, str], LessonRecord] = {}
+            for week in (0, 1):
+                start = (monday + timedelta(weeks=week)).isoformat()
+                for rec in self._scrape_timetable(page, start):
+                    lessons[(rec.date, rec.period, rec.title)] = rec
+
+            return classes, tasks_by_class, cas, list(lessons.values())
 
         return self._with_authenticated_browser(_run)
 

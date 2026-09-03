@@ -42,12 +42,13 @@ class SyncService:
             classes_repo = ClassRepository(session)
             task_repo = TaskRepository(session)
             cas_repo = CasRepository(session)
+            lesson_repo = LessonRepository(session)
 
             run = sync_repo.start()
             try:
                 # One browser login for the whole sync: classes, their tasks,
                 # and CAS are scraped in a single authenticated session.
-                classes, tasks_by_class, experiences = self.browser.collect_startup_data()
+                classes, tasks_by_class, experiences, lessons = self.browser.collect_startup_data()
                 classes_repo.upsert_many(classes)
 
                 total_tasks = 0
@@ -55,6 +56,7 @@ class SyncService:
                     total_tasks += task_repo.upsert_many(tasks_by_class.get(cls.class_id, []))
 
                 cas_repo.upsert_experiences(experiences)
+                lesson_repo.upsert_many(lessons)
                 sync_repo.finish(run, "success")
                 return ToolResult(
                     success=True,
@@ -63,6 +65,7 @@ class SyncService:
                         "classes": len(classes),
                         "tasks": total_tasks,
                         "cas_experiences": len(experiences),
+                        "lessons": len(lessons),
                         "sync_run_id": run.id,
                     },
                 )
