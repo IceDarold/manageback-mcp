@@ -606,12 +606,19 @@ def test_grading_sweep_prefers_submitted_work():
                 TaskRecord(task_id=3, class_id=100, title="Recent unmarked",
                            due_at=datetime(2026, 9, 2, 9, 0), status=None,
                            url="u3", dropbox_url="d", raw_hash="r"),
+                TaskRecord(task_id=4, class_id=100, title="Submitted early, due later",
+                           due_at=datetime(2027, 1, 5, 9, 0), status="Submitted",
+                           url="u4", dropbox_url="d", raw_hash="r"),
+                TaskRecord(task_id=5, class_id=100, title="Future, not handed in",
+                           due_at=datetime(2027, 2, 5, 9, 0), status="Pending",
+                           url="u5", dropbox_url="d", raw_hash="r"),
             ]
         )
 
     with db.session() as session:
         # Ids read inside the session; the rows detach when it closes.
-        order = [r.task_id for r in TaskRepository(session).list_for_grading(3, datetime(2026, 9, 10))]
+        order = [r.task_id for r in TaskRepository(session).list_for_grading(10, datetime(2026, 9, 10))]
 
-    # The old submitted task outranks both newer ones that were never handed in.
-    assert order == [1, 3, 2]
+    # Submitted work leads, newest first; work still to come and never handed in
+    # (task 5) is not worth a page load at all.
+    assert order == [4, 1, 3, 2]

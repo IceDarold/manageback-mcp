@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Iterable
 
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from .schema import (
@@ -169,7 +169,14 @@ class TaskRepository:
         return list(
             self.session.execute(
                 select(TaskEntity)
-                .where(TaskEntity.due_at.is_not(None), TaskEntity.due_at <= before)
+                # Handed-in work qualifies whatever its deadline: a third of it
+                # here was submitted early and would never be reached otherwise.
+                .where(
+                    or_(
+                        TaskEntity.status == "Submitted",
+                        and_(TaskEntity.due_at.is_not(None), TaskEntity.due_at <= before),
+                    )
+                )
                 .order_by(
                     submitted_first,
                     TaskEntity.graded_at.asc().nulls_first(),
