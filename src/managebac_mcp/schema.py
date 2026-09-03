@@ -63,6 +63,30 @@ class TaskSubmission(Base):
     artifact_path: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class LessonEntity(Base):
+    __tablename__ = "lessons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    period: Mapped[str] = mapped_column(String(32), nullable=False)
+    class_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    grade: Mapped[Optional[str]] = mapped_column(String(64))
+    teacher: Mapped[Optional[str]] = mapped_column(String(255))
+    room: Mapped[Optional[str]] = mapped_column(String(64))
+    starts_at: Mapped[Optional[str]] = mapped_column(String(16))
+    ends_at: Mapped[Optional[str]] = mapped_column(String(16))
+    rotation_day: Mapped[Optional[str]] = mapped_column(String(32))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # A period on a date holds at most one lesson, so re-syncing a week
+    # updates rows in place instead of piling up duplicates.
+    __table_args__ = (
+        UniqueConstraint("date", "period", "title", name="uq_lesson_slot"),
+    )
+
+
 class CasExperience(Base):
     __tablename__ = "cas_experiences"
 

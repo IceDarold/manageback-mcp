@@ -57,6 +57,27 @@ class TaskRecord:
 
 
 @dataclass
+class LessonRecord:
+    """One timetabled lesson on one concrete date.
+
+    The school runs a ten-day rotation, so lessons are stored per date rather
+    than as a weekly template -- next Monday does not repeat this Monday.
+    """
+
+    date: str  # ISO "2026-09-07"
+    period: str  # "Homeroom", "0" .. "6"
+    class_id: int | None  # None for Homeroom, which is not an IB class
+    title: str
+    grade: str | None
+    teacher: str | None
+    room: str | None
+    starts_at: str | None  # "08:40"
+    ends_at: str | None  # "09:40"
+    rotation_day: str | None
+    raw_hash: str
+
+
+@dataclass
 class CasExperienceRecord:
     experience_id: int
     title: str

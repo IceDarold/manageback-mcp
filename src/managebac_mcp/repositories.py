@@ -13,12 +13,13 @@ from .schema import (
     CasExperience,
     CasReflection,
     ClassEntity,
+    LessonEntity,
     PageSnapshot,
     SyncRun,
     TaskEntity,
     TaskSubmission,
 )
-from .types import CasExperienceRecord, ClassRecord, TaskRecord
+from .types import CasExperienceRecord, ClassRecord, LessonRecord, TaskRecord
 
 
 def _now() -> datetime:
@@ -232,3 +233,66 @@ class SnapshotRepository:
         self.session.add(row)
         self.session.flush()
         return row
+
+
+class LessonRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def upsert_many(self, records: Iterable[LessonRecord]) -> int:
+        count = 0
+        for record in records:
+            row = self.session.execute(
+                select(LessonEntity).where(
+                    LessonEntity.date == record.date,
+                    LessonEntity.period == record.period,
+                    LessonEntity.title == record.title,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = LessonEntity(
+                    date=record.date,
+                    period=record.period,
+                    class_id=record.class_id,
+                    title=record.title,
+                    grade=record.grade,
+                    teacher=record.teacher,
+                    room=record.room,
+                    starts_at=record.starts_at,
+                    ends_at=record.ends_at,
+                    rotation_day=record.rotation_day,
+                    raw_hash=record.raw_hash,
+                    last_seen_at=_now(),
+                )
+                self.session.add(row)
+            else:
+                row.class_id = record.class_id
+                row.grade = record.grade
+                row.teacher = record.teacher
+                row.room = record.room
+                row.starts_at = record.starts_at
+                row.ends_at = record.ends_at
+                row.rotation_day = record.rotation_day
+                row.raw_hash = record.raw_hash
+                row.last_seen_at = _now()
+            count += 1
+        return count
+
+    def list_between(self, start_date: str, end_date: str) -> list[LessonEntity]:
+        return list(
+            self.session.execute(
+                select(LessonEntity)
+                .where(LessonEntity.date >= start_date, LessonEntity.date <= end_date)
+                .order_by(LessonEntity.date.asc(), LessonEntity.starts_at.asc().nulls_first())
+            ).scalars().all()
+        )
+
+    def max_last_seen(self) -> datetime | None:
+        return self.session.execute(select(func.max(LessonEntity.last_seen_at))).scalar()
+
+    def coverage(self) -> tuple[str | None, str | None]:
+        """Earliest and latest dates the cache holds, to spot uncovered windows."""
+        row = self.session.execute(
+            select(func.min(LessonEntity.date), func.max(LessonEntity.date))
+        ).one()
+        return row[0], row[1]

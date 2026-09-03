@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date as _date, datetime, timedelta
 from typing import Any
 
 from .config import Settings, load_managebac_config
@@ -138,6 +138,45 @@ def create_mcp_server():
         if _is_stale(read_service.tasks_last_seen_any(), max_age_minutes):
             sync_service.run_startup_sync()
         return _serialize(read_service.agenda(view=view, within_days=within_days, subject=subject))
+
+    @mcp.tool(name="read_schedule", annotations=_RO)
+    def read_schedule(
+        date: str | None = None,
+        days: int = 1,
+        max_age_minutes: int | None = 720,
+    ) -> dict[str, Any]:
+        """Lesson timetable — answers "what do I have today/tomorrow?" and when.
+
+        Returns each day's lessons in order with period, start/end time, subject,
+        teacher, room, and the rotation day. Every lesson also carries due_today:
+        the deadlines for that same class falling on that date, so planning a day
+        takes one call.
+
+        date: ISO "2026-09-07" (default: today). days: how many days to return
+        (default 1; use 7 for the week ahead). The school runs a ten-day rotation,
+        so each date genuinely differs -- do not assume next week repeats this one.
+        Auto-refreshes when the cache is older than max_age_minutes (default 720).
+        """
+        # A fresh cache still misses a week we never fetched, so coverage is
+        # checked as well as age -- otherwise a future week returns a silent [].
+        window_start = _date.fromisoformat(date) if date else _date.today()
+        window_end = window_start + timedelta(days=max(1, days) - 1)
+        cov_from, cov_to = read_service.lessons_coverage()
+        uncovered = (
+            cov_from is None
+            or window_start.isoformat() < cov_from
+            or window_end.isoformat() > cov_to
+        )
+        if uncovered or _is_stale(read_service.lessons_last_seen(), max_age_minutes):
+            weeks = max(1, (window_end - window_start).days // 7 + 2)
+            sync_service.refresh_timetable(start_date=window_start.isoformat(), weeks=weeks)
+        return _serialize(read_service.schedule(date=date, days=days))
+
+    @mcp.tool(name="action_refresh_timetable", annotations=_WR)
+    def action_refresh_timetable(start_date: str | None = None, weeks: int = 2) -> dict[str, Any]:
+        """Force a re-scrape of the timetable. Advanced: read_schedule(max_age_minutes=0)
+        does the same thing and returns the data."""
+        return _serialize(sync_service.refresh_timetable(start_date=start_date, weeks=weeks))
 
     @mcp.tool(name="action_refresh_classes", annotations=_WR)
     def action_refresh_classes() -> dict[str, Any]:

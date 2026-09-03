@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 
 from .browser import BrowserGateway
 from .db import Database
 from .errors import AppError, CAS_EXPERIENCE_NOT_FOUND, CLASS_NOT_FOUND, INVALID_INPUT, TASK_NOT_FOUND
-from .repositories import CasRepository, ClassRepository, SnapshotRepository, SubmissionRepository, SyncRunRepository, TaskRepository
+from .repositories import CasRepository, ClassRepository, LessonRepository, SnapshotRepository, SubmissionRepository, SyncRunRepository, TaskRepository
 from .types import ToolArtifacts, ToolResult
 
 
@@ -71,6 +71,29 @@ class SyncService:
                 return ToolResult(success=False, message=exc.message, error_code=exc.code, data={"sync_run_id": run.id})
 
 
+    def refresh_timetable(self, start_date: str | None = None, weeks: int = 2) -> ToolResult:
+        """Re-scrape the rotation timetable for `weeks` weeks from the given Monday."""
+        anchor = date_cls.fromisoformat(start_date) if start_date else date_cls.today()
+        monday = anchor - timedelta(days=anchor.weekday())
+        starts = [(monday + timedelta(weeks=w)).isoformat() for w in range(max(1, weeks))]
+
+        with self.db.session() as session:
+            sync_repo = SyncRunRepository(session)
+            run = sync_repo.start()
+            try:
+                lessons = self.browser.fetch_timetable(starts)
+                count = LessonRepository(session).upsert_many(lessons)
+                sync_repo.finish(run, "success")
+                return ToolResult(
+                    success=True,
+                    message=f"Refreshed {count} lesson(s) across {len(starts)} week(s)",
+                    data={"lessons": count, "weeks": starts},
+                )
+            except AppError as exc:
+                sync_repo.finish(run, "failed", error_code=exc.code, error_message=exc.message)
+                return ToolResult(success=False, message=exc.message, error_code=exc.code)
+
+
 class ReadService:
     def __init__(self, db: Database):
         self.db = db
@@ -89,6 +112,68 @@ class ReadService:
     def tasks_last_seen_any(self) -> "datetime | None":
         with self.db.session() as session:
             return TaskRepository(session).max_last_seen_any()
+
+    def lessons_last_seen(self) -> datetime | None:
+        with self.db.session() as session:
+            return LessonRepository(session).max_last_seen()
+
+    def lessons_coverage(self) -> tuple[str | None, str | None]:
+        with self.db.session() as session:
+            return LessonRepository(session).coverage()
+
+    def schedule(self, date: str | None = None, days: int = 1, now: datetime | None = None) -> ToolResult:
+        """Lessons for a date window, each already joined to its class and deadlines."""
+        now = now or datetime.now()
+        start = date_cls.fromisoformat(date) if date else now.date()
+        end = start + timedelta(days=max(1, days) - 1)
+
+        with self.db.session() as session:
+            lesson_repo = LessonRepository(session)
+            rows = lesson_repo.list_between(start.isoformat(), end.isoformat())
+            cov_from, cov_to = lesson_repo.coverage()
+            # Keyed by class AND day: a deadline belongs to the lesson sitting
+            # on its own date, not to every lesson of that class in the window.
+            tasks_by_slot: dict[tuple[int, str], list[dict]] = {}
+            for task in TaskRepository(session).list_all():
+                if task.due_at is None:
+                    continue
+                due_date = task.due_at.date()
+                if start <= due_date <= end:
+                    tasks_by_slot.setdefault((task.class_id, due_date.isoformat()), []).append(
+                        {"task_id": task.task_id, "title": task.title, "due_at": task.due_at.isoformat()}
+                    )
+
+            days_out: dict[str, list[dict]] = {}
+            for row in rows:
+                days_out.setdefault(row.date, []).append(
+                    {
+                        "period": row.period,
+                        "title": row.title,
+                        "class_id": row.class_id,
+                        "teacher": row.teacher,
+                        "room": row.room,
+                        "starts_at": row.starts_at,
+                        "ends_at": row.ends_at,
+                        "rotation_day": row.rotation_day,
+                        # Deadlines landing on this lesson's own day, so "what is
+                        # due in maths tomorrow" needs no second call.
+                        "due_today": tasks_by_slot.get((row.class_id, row.date), []) if row.class_id else [],
+                    }
+                )
+
+        schedule = [{"date": d, "lessons": days_out[d]} for d in sorted(days_out)]
+        return ToolResult(
+            success=True,
+            message=f"{sum(len(d['lessons']) for d in schedule)} lesson(s) over {len(schedule)} day(s)",
+            data={
+                "from": start.isoformat(),
+                "to": end.isoformat(),
+                "days": schedule,
+                # So an empty result can be told apart from a window the cache
+                # never covered.
+                "cached_range": {"from": cov_from, "to": cov_to},
+            },
+        )
 
     def agenda(
         self,

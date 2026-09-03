@@ -19,7 +19,7 @@ from .errors import (
     UNKNOWN_UI_CHANGE,
     UPLOAD_FAILED,
 )
-from .types import CasExperienceRecord, ClassRecord, TaskRecord
+from .types import CasExperienceRecord, ClassRecord, LessonRecord, TaskRecord
 
 
 @dataclass
@@ -44,6 +44,8 @@ class BrowserGateway(Protocol):
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]: ...
 
     def fetch_task_details(self, task_url: str) -> dict: ...
+
+    def fetch_timetable(self, start_dates: list[str]) -> list[LessonRecord]: ...
 
     def collect_startup_data(self) -> "StartupData": ...
 
@@ -104,39 +106,8 @@ class PlaywrightBrowserGateway:
             )
         return dedupe_classes(records)
 
-    def _probe_dump(self, page) -> None:
-        """TEMP: capture the timetable views needed to model lessons."""
-        out = Path("/var/lib/manageback-mcp/probe")
-        out.mkdir(parents=True, exist_ok=True)
-
-        def grab(name: str, url: str) -> str:
-            try:
-                page.goto(url, timeout=self.config.timeouts_ms.navigation)
-                page.wait_for_timeout(1200)
-                html = page.content()
-                (out / f"{name}.html").write_text(html, encoding="utf-8")
-                (out / f"{name}.url").write_text(page.url, encoding="utf-8")
-                return html
-            except Exception as exc:  # probe must never break the real sync
-                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
-                return ""
-
-        base = self.config.base_url
-        grab("tt_weekly", base + "/student/timetables/weekly?start_date=2026-08-31")
-        grab("tt_weekly_next", base + "/student/timetables/weekly?start_date=2026-09-07")
-        grab("tt_three", base + "/student/timetables/three_days?start_date=2026-09-03")
-        grab(
-            "tt_popup",
-            base + "/student/timetables/popup?class_lesson_period_id=5411674"
-                   "&date=2026-09-02&ib_class_id=12820005&timetable_user_id=15616945",
-        )
-
     def fetch_classes(self) -> list[ClassRecord]:
-        def _run(page):
-            self._probe_dump(page)
-            return self._scrape_classes(page)
-
-        return self._with_authenticated_browser(_run)
+        return self._with_authenticated_browser(self._scrape_classes)
 
     # Per-class task lists render nearly empty (a lone task shows only as a nav
     # tab), so the authoritative source is the cross-class Tasks & Deadlines
@@ -274,6 +245,112 @@ class PlaywrightBrowserGateway:
             except ValueError:
                 continue
         return (parsed[0] if parsed else None, parsed[1] if len(parsed) > 1 else None)
+
+    @staticmethod
+    def _parse_time_range(text: str) -> tuple["str | None", "str | None"]:
+        """"8:40 AM - 9:40 AM" -> ("08:40", "09:40")."""
+        found = re.findall(r"(\d{1,2}):(\d{2})\s*([AaPp])\.?[Mm]", text or "")
+        out: list[str] = []
+        for hour, minute, half in found[:2]:
+            h = int(hour) % 12 + (12 if half.lower() == "p" else 0)
+            out.append(f"{h:02d}:{minute}")
+        return (out[0] if out else None, out[1] if len(out) > 1 else None)
+
+    def _scrape_timetable(self, page, start_date: str) -> list[LessonRecord]:
+        """Read one week of the rotation timetable starting at start_date."""
+        url = self.config.build_url(self.config.routes.timetable_weekly) + f"?start_date={start_date}"
+        page.goto(url, timeout=self.config.timeouts_ms.navigation)
+        page.wait_for_timeout(800)
+
+        table = page.locator("#timetable table").first
+        if table.count() == 0:
+            return []
+
+        # Column 0 is the period label; the rest carry "Sep 7, Mon Rotation Day 6".
+        rotations: list[str | None] = []
+        headers = table.locator("th[scope='col']")
+        for i in range(1, headers.count()):
+            m = re.search(r"Rotation Day\s*(\S+)", headers.nth(i).inner_text())
+            rotations.append(m.group(1) if m else None)
+
+        records: list[LessonRecord] = []
+        rows = table.locator("tr")
+        for r in range(rows.count()):
+            row = rows.nth(r)
+            label = row.locator("th[scope='row']").first
+            if label.count() == 0:
+                continue
+            period = " ".join(label.inner_text().split()) or str(r)
+
+            cells = row.locator("td")
+            for c in range(cells.count()):
+                items = cells.nth(c).locator(".f-timetable-item")
+                for k in range(items.count()):
+                    rec = self._parse_lesson_item(
+                        items.nth(k),
+                        period=period,
+                        rotation_day=rotations[c] if c < len(rotations) else None,
+                    )
+                    if rec is not None:
+                        records.append(rec)
+        return records
+
+    def _parse_lesson_item(self, item, period: str, rotation_day: "str | None") -> "LessonRecord | None":
+        # The date lives in the popover URL, which every tile carries; a tile
+        # without one is decoration we cannot place on a day.
+        popup = item.get_attribute("data-bs-content-url") or ""
+        m = re.search(r"date=(\d{4}-\d{2}-\d{2})", popup)
+        if not m:
+            return None
+        date = m.group(1)
+
+        class_id = None
+        cm = re.search(r"ib_class_id=(\d+)", popup)
+        if cm:
+            class_id = int(cm.group(1))
+
+        title_el = item.locator(".fw-semibold").first
+        title = " ".join(title_el.inner_text().split()) if title_el.count() > 0 else ""
+        if not title:
+            return None
+
+        starts_at = ends_at = None
+        time_el = item.locator("small").first
+        if time_el.count() > 0:
+            starts_at, ends_at = self._parse_time_range(time_el.inner_text())
+
+        # Lesson tiles render exactly four <p>: title, programme, teacher, room.
+        # Homeroom tiles render none, so every field below stays optional.
+        paragraphs = item.locator("p")
+        texts = [" ".join(paragraphs.nth(i).inner_text().split()) for i in range(paragraphs.count())]
+        grade = texts[1] if len(texts) > 1 else None
+        teacher = texts[2] if len(texts) > 2 else None
+        room = texts[3] if len(texts) > 3 else None
+
+        raw = f"{date}:{period}:{title}:{starts_at}:{ends_at}:{teacher}:{room}"
+        return LessonRecord(
+            date=date,
+            period=period,
+            class_id=class_id,
+            title=title,
+            grade=grade,
+            teacher=teacher,
+            room=room,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            rotation_day=rotation_day,
+            raw_hash=self._hash(raw),
+        )
+
+    def fetch_timetable(self, start_dates: list[str]) -> list[LessonRecord]:
+        def _run(page):
+            out: dict[tuple[str, str, str], LessonRecord] = {}
+            for start_date in start_dates:
+                for rec in self._scrape_timetable(page, start_date):
+                    out[(rec.date, rec.period, rec.title)] = rec
+            return list(out.values())
+
+        return self._with_authenticated_browser(_run)
 
     def _scrape_cas(self, page) -> list[CasExperienceRecord]:
         page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)

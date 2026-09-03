@@ -6,7 +6,7 @@ from pathlib import Path
 from managebac_mcp.browser import UploadOutcome
 from managebac_mcp.db import Database
 from managebac_mcp.services import ActionService, ReadService, SyncService
-from managebac_mcp.types import CasExperienceRecord, ClassRecord, TaskRecord
+from managebac_mcp.types import CasExperienceRecord, ClassRecord, LessonRecord, TaskRecord
 
 
 class FakeBrowser:
@@ -57,6 +57,15 @@ class FakeBrowser:
             "submission_status": "Not Submitted",
             "url": task_url,
         }
+
+    def fetch_timetable(self, start_dates: list[str]) -> list[LessonRecord]:
+        return [
+            LessonRecord(
+                date="2026-09-07", period="1", class_id=12816550, title="Russian A SL",
+                grade="DP 2", teacher="Tatiana Komova", room="D1",
+                starts_at="08:40", ends_at="09:40", rotation_day="6", raw_hash="l1",
+            )
+        ]
 
     def collect_startup_data(self):
         classes = self.fetch_classes()
@@ -355,3 +364,78 @@ def test_scrape_deadlines_stops_when_page_param_ignored():
 
     assert [r.task_id for r in records] == [7]
     assert len(page.urls) == 2  # page 1, then the duplicate page 2 stops it
+
+
+def test_parse_time_range_handles_noon_and_midday():
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    assert G._parse_time_range("8:40 AM - 9:40 AM") == ("08:40", "09:40")
+    assert G._parse_time_range("12:10 PM - 1:10 PM") == ("12:10", "13:10")
+    assert G._parse_time_range("11:05 AM - 12:05 PM") == ("11:05", "12:05")
+    assert G._parse_time_range("") == (None, None)
+
+
+def test_schedule_groups_by_day_and_joins_same_day_deadlines():
+    from managebac_mcp.repositories import ClassRepository, LessonRepository, TaskRepository
+
+    db = build_db()
+    read = ReadService(db)
+
+    with db.session() as session:
+        ClassRepository(session).upsert_many(
+            [ClassRecord(class_id=100, title="Mathematics HL", teacher="A", url="u", raw_hash="h")]
+        )
+        LessonRepository(session).upsert_many(
+            [
+                LessonRecord(date="2026-09-07", period="2", class_id=100, title="Maths",
+                             grade="DP 2", teacher="A", room="D3", starts_at="09:45",
+                             ends_at="10:45", rotation_day="6", raw_hash="r"),
+                LessonRecord(date="2026-09-07", period="1", class_id=None, title="Homeroom",
+                             grade=None, teacher=None, room=None, starts_at=None,
+                             ends_at=None, rotation_day="6", raw_hash="r"),
+                LessonRecord(date="2026-09-08", period="1", class_id=100, title="Maths",
+                             grade="DP 2", teacher="A", room="D3", starts_at="08:40",
+                             ends_at="09:40", rotation_day="7", raw_hash="r"),
+            ]
+        )
+        TaskRepository(session).upsert_many(
+            [
+                TaskRecord(task_id=1, class_id=100, title="Essay",
+                           due_at=datetime(2026, 9, 7, 23, 59), status="Pending",
+                           url="u", dropbox_url="d", raw_hash="r"),
+                TaskRecord(task_id=2, class_id=100, title="Later",
+                           due_at=datetime(2026, 9, 20, 9, 0), status="Pending",
+                           url="u", dropbox_url="d", raw_hash="r"),
+            ]
+        )
+
+    one = read.schedule(date="2026-09-07", days=1)
+    assert [d["date"] for d in one.data["days"]] == ["2026-09-07"]
+    lessons = one.data["days"][0]["lessons"]
+    # Homeroom has no start time, so it sorts first within the day.
+    assert [l["title"] for l in lessons] == ["Homeroom", "Maths"]
+    assert [t["task_id"] for t in lessons[1]["due_today"]] == [1]
+    assert lessons[0]["due_today"] == []
+
+    two = read.schedule(date="2026-09-07", days=2)
+    assert [d["date"] for d in two.data["days"]] == ["2026-09-07", "2026-09-08"]
+    # The Sep 20 deadline is outside the window and must not leak in.
+    assert two.data["days"][1]["lessons"][0]["due_today"] == []
+    assert two.data["cached_range"] == {"from": "2026-09-07", "to": "2026-09-08"}
+
+
+def test_refresh_timetable_anchors_on_monday():
+    db = build_db()
+    browser = FakeBrowser()
+    seen: list[list[str]] = []
+
+    class Recording(FakeBrowser):
+        def fetch_timetable(self, start_dates):
+            seen.append(start_dates)
+            return FakeBrowser.fetch_timetable(self, start_dates)
+
+    sync = SyncService(db, Recording())
+    # 2026-09-10 is a Thursday; the week must start on Monday the 7th.
+    res = sync.refresh_timetable(start_date="2026-09-10", weeks=2)
+    assert res.success
+    assert seen == [["2026-09-07", "2026-09-14"]]
