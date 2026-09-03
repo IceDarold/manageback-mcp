@@ -112,6 +112,13 @@ class TaskRepository:
             ).scalars().all()
         )
 
+    def list_all(self) -> list[TaskEntity]:
+        return list(
+            self.session.execute(
+                select(TaskEntity).order_by(TaskEntity.due_at.asc().nulls_last(), TaskEntity.title.asc())
+            ).scalars().all()
+        )
+
     def get(self, task_id: int) -> TaskEntity | None:
         return self.session.execute(select(TaskEntity).where(TaskEntity.task_id == task_id)).scalar_one_or_none()
 
@@ -119,6 +126,9 @@ class TaskRepository:
         return self.session.execute(
             select(func.max(TaskEntity.last_seen_at)).where(TaskEntity.class_id == class_id)
         ).scalar()
+
+    def max_last_seen_any(self) -> datetime | None:
+        return self.session.execute(select(func.max(TaskEntity.last_seen_at))).scalar()
 
 
 class SubmissionRepository:

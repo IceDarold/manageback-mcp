@@ -104,6 +104,28 @@ def create_mcp_server():
             action_service.refresh_classes()
         return _serialize(read_service.list_classes())
 
+    @mcp.tool(name="read_agenda", annotations=_RO)
+    def read_agenda(
+        view: str = "upcoming",
+        within_days: int | None = None,
+        subject: str | None = None,
+        max_age_minutes: int | None = 15,
+    ) -> dict[str, Any]:
+        """Deadlines across ALL classes in one call — the fastest way to answer "what's due?".
+
+        Returns tasks sorted by due date, each with the class NAME (not just id), the due
+        date in ISO plus human phrasing ("in 3 days" / "overdue by 2 hours"), and status —
+        so no per-class or id lookups are needed.
+
+        view: "upcoming" (default, future deadlines), "overdue", "today", "week" (next 7 days),
+        or "all". within_days=N overrides view with a rolling N-day forward window. subject is a
+        case-insensitive class-name filter (e.g. "math"). Data is auto-refreshed when older than
+        max_age_minutes (default 15; pass None to read cache only, or 0 to force a refresh).
+        """
+        if _is_stale(read_service.tasks_last_seen_any(), max_age_minutes):
+            sync_service.run_startup_sync()
+        return _serialize(read_service.agenda(view=view, within_days=within_days, subject=subject))
+
     @mcp.tool(name="action_refresh_classes", annotations=_WR)
     def action_refresh_classes() -> dict[str, Any]:
         return _serialize(action_service.refresh_classes())
@@ -132,7 +154,21 @@ def create_mcp_server():
 
     @mcp.tool(name="action_submit_task_file", annotations=_WR)
     def action_submit_task_file(task_id: int, file_path: str, comment: str | None = None) -> dict[str, Any]:
+        """Submit a local file to a task's dropbox by server-side path (CLI/local use)."""
         return _serialize(action_service.submit_task_file(task_id=task_id, file_path=file_path, comment=comment))
+
+    @mcp.tool(name="action_submit_task_content", annotations=_WR)
+    def action_submit_task_content(task_id: int, file_name: str, content_base64: str, comment: str | None = None) -> dict[str, Any]:
+        """Submit a file to a task's dropbox from inline base64 content.
+
+        Use this from a remote agent that cannot place a file on the server: pass the
+        file's bytes as base64 in content_base64 and the desired file_name (e.g.
+        "essay.pdf"). The server writes it to a temp file, uploads it to ManageBac, and
+        deletes it. Prefer this over action_submit_task_file when you only have the content.
+        """
+        return _serialize(
+            action_service.submit_task_content(task_id=task_id, file_name=file_name, content_base64=content_base64, comment=comment)
+        )
 
     @mcp.tool(name="read_submission_result", annotations=_RO)
     def read_submission_result(task_id: int) -> dict[str, Any]:

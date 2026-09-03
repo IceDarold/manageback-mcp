@@ -119,6 +119,30 @@ def test_submit_and_read_submission(tmp_path: Path):
     assert result.data["submission"]["file_name"] == "report.txt"
 
 
+def test_submit_task_content_base64(tmp_path: Path):
+    import base64
+
+    db = build_db()
+    browser = FakeBrowser()
+    SyncService(db, browser).run_startup_sync()
+
+    action = ActionService(db, browser)
+    read = ReadService(db)
+
+    task_id = 47417931 + 12816550
+    content = base64.b64encode(b"hello world").decode("ascii")
+    submit = action.submit_task_content(task_id=task_id, file_name="essay.pdf", content_base64=content)
+    assert submit.success
+
+    result = read.submission_result(task_id)
+    assert result.success
+    assert result.data["submission"]["file_name"] == "essay.pdf"
+
+    bad = action.submit_task_content(task_id=task_id, file_name="x", content_base64="!!!not base64!!!")
+    assert not bad.success
+    assert bad.error_code == "INVALID_INPUT"
+
+
 def test_cas_reflections_actions(tmp_path: Path):
     db = build_db()
     browser = FakeBrowser()
@@ -152,3 +176,63 @@ def test_parse_due_infers_closest_year_and_handles_garbage():
     assert d is not None and (d.month, d.day, d.hour, d.minute) == (6, 23, 8, 25)
     assert G._parse_due("") is None
     assert G._parse_due("not a date") is None
+
+
+def test_relative_due_phrasing():
+    from managebac_mcp.services import _relative_due
+
+    now = datetime(2026, 9, 3, 12, 0, 0)
+    assert _relative_due(None, now) is None
+    assert _relative_due(datetime(2026, 9, 6, 12, 0, 0), now) == "in 3 days"
+    assert _relative_due(datetime(2026, 9, 1, 12, 0, 0), now) == "overdue by 2 days"
+    assert _relative_due(datetime(2026, 9, 3, 15, 0, 0), now) == "in 3 hours"
+    assert _relative_due(datetime(2026, 9, 3, 11, 30, 0), now) == "overdue by 30 minutes"
+
+
+def test_agenda_views_and_subject_filter():
+    db = build_db()
+    browser = FakeBrowser()
+    read = ReadService(db)
+
+    # Seed two classes with tasks at different due dates directly through the sync path,
+    # then override due dates so we can exercise view filters deterministically.
+    from managebac_mcp.repositories import ClassRepository, TaskRepository
+    from managebac_mcp.types import ClassRecord, TaskRecord
+
+    now = datetime(2026, 9, 10, 12, 0, 0)
+    with db.session() as session:
+        ClassRepository(session).upsert_many(
+            [
+                ClassRecord(class_id=100, title="Mathematics HL", teacher="A", url="https://x/classes/100", raw_hash="h"),
+                ClassRecord(class_id=200, title="Biology SL", teacher="B", url="https://x/classes/200", raw_hash="h"),
+            ]
+        )
+        TaskRepository(session).upsert_many(
+            [
+                TaskRecord(task_id=1, class_id=100, title="Overdue essay", due_at=datetime(2026, 9, 8, 9, 0, 0), status="Pending", url="u1", dropbox_url="d1", raw_hash="r"),
+                TaskRecord(task_id=2, class_id=100, title="Today quiz", due_at=datetime(2026, 9, 10, 18, 0, 0), status="Pending", url="u2", dropbox_url="d2", raw_hash="r"),
+                TaskRecord(task_id=3, class_id=200, title="Next week lab", due_at=datetime(2026, 9, 15, 9, 0, 0), status="Pending", url="u3", dropbox_url="d3", raw_hash="r"),
+                TaskRecord(task_id=4, class_id=200, title="No due", due_at=None, status="Pending", url="u4", dropbox_url="d4", raw_hash="r"),
+            ]
+        )
+
+    upcoming = read.agenda(view="upcoming", now=now)
+    ids = [t["task_id"] for t in upcoming.data["tasks"]]
+    assert ids == [2, 3]  # sorted by due, overdue + no-due excluded
+    assert upcoming.data["tasks"][0]["class_name"] == "Mathematics HL"
+    assert upcoming.data["tasks"][0]["due_relative"] == "in 6 hours"
+
+    overdue = read.agenda(view="overdue", now=now)
+    assert [t["task_id"] for t in overdue.data["tasks"]] == [1]
+
+    today = read.agenda(view="today", now=now)
+    assert [t["task_id"] for t in today.data["tasks"]] == [2]
+
+    week = read.agenda(view="week", now=now)
+    assert [t["task_id"] for t in week.data["tasks"]] == [2, 3]
+
+    math = read.agenda(view="all", subject="math", now=now)
+    assert {t["task_id"] for t in math.data["tasks"]} == {1, 2}
+
+    window = read.agenda(within_days=3, now=now)
+    assert [t["task_id"] for t in window.data["tasks"]] == [2]

@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .browser import BrowserGateway
 from .db import Database
-from .errors import AppError, CAS_EXPERIENCE_NOT_FOUND, CLASS_NOT_FOUND, TASK_NOT_FOUND
+from .errors import AppError, CAS_EXPERIENCE_NOT_FOUND, CLASS_NOT_FOUND, INVALID_INPUT, TASK_NOT_FOUND
 from .repositories import CasRepository, ClassRepository, SnapshotRepository, SubmissionRepository, SyncRunRepository, TaskRepository
 from .types import ToolArtifacts, ToolResult
+
+
+def _relative_due(due: datetime | None, now: datetime) -> str | None:
+    """Human phrasing for a deadline relative to now, e.g. "in 3 days" / "overdue by 2 hours"."""
+    if due is None:
+        return None
+    total = (due - now).total_seconds()
+    overdue = total < 0
+    minutes = abs(total) / 60
+    if minutes < 60:
+        n = max(1, int(round(minutes)))
+        unit = f"{n} minute{'s' if n != 1 else ''}"
+    elif minutes < 60 * 24:
+        n = int(round(minutes / 60))
+        unit = f"{n} hour{'s' if n != 1 else ''}"
+    else:
+        n = int(round(minutes / 60 / 24))
+        unit = f"{n} day{'s' if n != 1 else ''}"
+    return f"overdue by {unit}" if overdue else f"in {unit}"
 
 
 class SyncService:
@@ -65,6 +85,71 @@ class ReadService:
     def tasks_last_seen(self, class_id: int) -> "datetime | None":
         with self.db.session() as session:
             return TaskRepository(session).max_last_seen(class_id)
+
+    def tasks_last_seen_any(self) -> "datetime | None":
+        with self.db.session() as session:
+            return TaskRepository(session).max_last_seen_any()
+
+    def agenda(
+        self,
+        view: str = "upcoming",
+        within_days: int | None = None,
+        subject: str | None = None,
+        now: datetime | None = None,
+    ) -> ToolResult:
+        """Cross-class deadline list, sorted by due date, with class names and human due phrasing.
+
+        view: upcoming (due in the future), overdue (past due), today, week (next 7 days),
+        all (everything). When within_days is given it overrides view with a forward window.
+        subject is a case-insensitive substring match on the class name.
+        """
+        now = now or datetime.utcnow()
+        rows: list[dict] = []
+        with self.db.session() as session:
+            class_map = {c.class_id: c.title for c in ClassRepository(session).list_all()}
+            for t in TaskRepository(session).list_all():
+                class_name = class_map.get(t.class_id, str(t.class_id))
+                if subject and subject.lower() not in class_name.lower():
+                    continue
+                due = t.due_at
+
+                if within_days is not None:
+                    if due is None or due < now or due > now + timedelta(days=within_days):
+                        continue
+                elif view == "overdue":
+                    if due is None or due >= now:
+                        continue
+                elif view == "today":
+                    if due is None or due.date() != now.date():
+                        continue
+                elif view == "week":
+                    if due is None or due < now or due > now + timedelta(days=7):
+                        continue
+                elif view == "upcoming":
+                    if due is None or due < now:
+                        continue
+                # view == "all" -> no filter
+
+                rows.append(
+                    {
+                        "task_id": t.task_id,
+                        "title": t.title,
+                        "class_id": t.class_id,
+                        "class_name": class_name,
+                        "status": t.status,
+                        "due_at": due.isoformat() if due else None,
+                        "due_relative": _relative_due(due, now),
+                        "url": t.url,
+                        "dropbox_url": t.dropbox_url,
+                    }
+                )
+
+        rows.sort(key=lambda r: (r["due_at"] is None, r["due_at"] or ""))
+        return ToolResult(
+            success=True,
+            message=f"Returned {len(rows)} task(s) for view '{within_days and f'next {within_days}d' or view}'",
+            data={"view": view, "within_days": within_days, "subject": subject, "tasks": rows},
+        )
 
     def cas_last_seen(self) -> "datetime | None":
         with self.db.session() as session:
@@ -306,6 +391,40 @@ class ActionService:
                 data={"task_id": task_id, "status": outcome.status, "status_message": outcome.message},
                 artifacts=ToolArtifacts(screenshot=outcome.screenshot_path, html=outcome.html_path),
             )
+
+    def submit_task_content(self, task_id: int, file_name: str, content_base64: str, comment: str | None = None) -> ToolResult:
+        """Submit a dropbox file from inline base64 content.
+
+        The connector runs on a server with no access to the caller's filesystem,
+        so remote agents send the bytes inline instead of a path. The content is
+        written to a private temp file, uploaded, then removed.
+        """
+        import base64
+        import os
+        import tempfile
+
+        try:
+            raw = base64.b64decode(content_base64, validate=True)
+        except Exception:
+            return ToolResult(success=False, message="content_base64 is not valid base64", error_code=INVALID_INPUT)
+        if not raw:
+            return ToolResult(success=False, message="content_base64 decoded to empty bytes", error_code=INVALID_INPUT)
+
+        safe_name = os.path.basename(file_name or "").strip() or "submission"
+        tmp_dir = Path(tempfile.mkdtemp(prefix="mb_submit_"))
+        tmp_path = tmp_dir / safe_name
+        try:
+            tmp_path.write_bytes(raw)
+            return self.submit_task_file(task_id=task_id, file_path=str(tmp_path), comment=comment)
+        finally:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            try:
+                tmp_dir.rmdir()
+            except OSError:
+                pass
 
     def retry_submission(self, task_id: int, file_path: str) -> ToolResult:
         return self.submit_task_file(task_id=task_id, file_path=file_path)
