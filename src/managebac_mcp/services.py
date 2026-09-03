@@ -429,6 +429,20 @@ class ActionService:
     def retry_submission(self, task_id: int, file_path: str) -> ToolResult:
         return self.submit_task_file(task_id=task_id, file_path=file_path)
 
+    def task_details_live(self, task_id: int) -> ToolResult:
+        """Open the task's own page and read what the student actually has to do."""
+        with self.db.session() as session:
+            task = TaskRepository(session).get(task_id)
+            if task is None:
+                return ToolResult(success=False, message=f"Task {task_id} not found", error_code=TASK_NOT_FOUND)
+            url, title = task.url, task.title
+        details = self.browser.fetch_task_details(url)
+        return ToolResult(
+            success=True,
+            message=f"Task details for '{title}'",
+            data={"task_id": task_id, "title": title, **details},
+        )
+
     def refresh_cas(self) -> ToolResult:
         with self.db.session() as session:
             experiences = self.browser.fetch_cas_experiences()

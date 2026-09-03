@@ -43,6 +43,8 @@ class BrowserGateway(Protocol):
 
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]: ...
 
+    def fetch_task_details(self, task_url: str) -> dict: ...
+
     def collect_startup_data(self) -> "StartupData": ...
 
     def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome: ...
@@ -204,31 +206,82 @@ class PlaywrightBrowserGateway:
 
         return self._with_authenticated_browser(_run)
 
-    def _probe_dump(self, page) -> None:
-        """TEMPORARY selector probe -- dumps pages for DOM investigation. Remove after."""
-        import pathlib
+    @staticmethod
+    def _parse_hours(text: str) -> "float | None":
+        m = re.search(r"([\d.]+)\s*hour", text or "", re.I)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
 
-        base = "https://theislandprivateschool.managebac.com"
-        out = pathlib.Path("/var/lib/manageback-mcp/probe")
-        out.mkdir(parents=True, exist_ok=True)
-        targets = {
-            "cas_index": self.config.route_url("cas_index"),
-            "cas_detail": f"{base}/student/ib/activity/cas/26331638",
-            "cas_reflections": f"{base}/student/ib/activity/cas/26331638/reflections",
-            "task_detail": f"{base}/student/classes/12816569/core_tasks/48003132",
-        }
-        for name, url in targets.items():
+    @staticmethod
+    def _parse_cas_dates(text: str) -> tuple["str | None", "str | None"]:
+        """"Mar 09, 2026 - Mar 21, 2026" -> ("2026-03-09", "2026-03-21")."""
+        parsed: list[str] = []
+        for raw in re.findall(r"[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}", text or "")[:2]:
             try:
-                page.goto(url, timeout=self.config.timeouts_ms.navigation)
-                page.wait_for_timeout(1500)
-                (out / f"{name}.html").write_text(page.content(), encoding="utf-8")
-                (out / f"{name}.txt").write_text(page.inner_text("body"), encoding="utf-8")
-            except Exception as exc:  # probe must never break the real scrape
-                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
+                parsed.append(datetime.strptime(raw, "%b %d, %Y").date().isoformat())
+            except ValueError:
+                continue
+        return (parsed[0] if parsed else None, parsed[1] if len(parsed) > 1 else None)
 
     def _scrape_cas(self, page) -> list[CasExperienceRecord]:
-        self._probe_dump(page)
         page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)
+        page.wait_for_timeout(500)
+
+        # Each experience is a card carrying its approval flag, total hours and
+        # date range; the bare-link fallback below keeps the sync alive if the
+        # card markup changes.
+        tiles = page.locator("div.activity-tile")
+        records: list[CasExperienceRecord] = []
+        for i in range(tiles.count()):
+            tile = tiles.nth(i)
+            link = tile.locator("h3.title a[href*='/student/ib/activity/cas/']").first
+            if link.count() == 0:
+                continue
+            href = link.get_attribute("href") or ""
+            m = re.search(r"/student/ib/activity/cas/(\d+)", href)
+            if not m:
+                continue
+            eid = int(m.group(1))
+            title = link.inner_text().strip() or f"CAS {eid}"
+
+            status = None
+            flag = tile.locator(".flag-badge[data-bs-title]").first
+            if flag.count() > 0:
+                status = (flag.get_attribute("data-bs-title") or "").strip() or None
+
+            hours = None
+            hours_el = tile.locator("small.hours").first
+            if hours_el.count() > 0:
+                hours = self._parse_hours(hours_el.inner_text())
+
+            start_date = end_date = None
+            calendar = tile.locator(".cas-activity-calendar .cell").first
+            if calendar.count() > 0:
+                start_date, end_date = self._parse_cas_dates(calendar.inner_text())
+
+            records.append(
+                CasExperienceRecord(
+                    experience_id=eid,
+                    title=title,
+                    status=status,
+                    start_date=start_date,
+                    end_date=end_date,
+                    hours=hours,
+                    url=self.config.build_url(href),
+                    raw_hash=self._hash(f"{eid}:{title}:{status}:{hours}:{start_date}:{end_date}"),
+                )
+            )
+
+        if records:
+            return dedupe_cas(records)
+        return self._scrape_cas_links_only(page)
+
+    def _scrape_cas_links_only(self, page) -> list[CasExperienceRecord]:
+        """Fallback: titles and ids only, used when the card markup stops matching."""
         links = page.locator("a[href*='/student/ib/activity/cas/']")
         records: list[CasExperienceRecord] = []
         for i in range(links.count()):
@@ -252,6 +305,34 @@ class PlaywrightBrowserGateway:
                 )
             )
         return dedupe_cas(records)
+
+    def fetch_task_details(self, task_url: str) -> dict:
+        """Live-read one task page: what the student actually has to do."""
+
+        def _run(page):
+            page.goto(task_url, timeout=self.config.timeouts_ms.navigation)
+            page.wait_for_timeout(800)
+
+            def first_text(selector: str) -> "str | None":
+                loc = page.locator(selector).first
+                return loc.inner_text().strip() if loc.count() > 0 else None
+
+            def all_texts(selector: str) -> list[str]:
+                loc = page.locator(selector)
+                return [t for t in (loc.nth(i).inner_text().strip() for i in range(loc.count())) if t]
+
+            return {
+                "description": first_text(".core-task-details .fr-view"),
+                "labels": all_texts(".label-and-due .label"),
+                # HL/SL subject badges sit in the same row, so key off the
+                # tooltip attribute the status badge alone carries.
+                "status": first_text(".label-and-due .badge[data-bs-title] .badge-label"),
+                "due_text": first_text(".due-date .due"),
+                "submission_status": first_text(".assessment .cell:not(:has(span.fi__wrapper))"),
+                "url": task_url,
+            }
+
+        return self._with_authenticated_browser(_run)
 
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]:
         return self._with_authenticated_browser(self._scrape_cas)

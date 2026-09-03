@@ -148,6 +148,18 @@ def create_mcp_server():
     def read_task(task_id: int) -> dict[str, Any]:
         return _serialize(read_service.task_details(task_id))
 
+    @mcp.tool(name="read_task_details", annotations=_RO)
+    def read_task_details(task_id: int) -> dict[str, Any]:
+        """Open one task's page and return what the student actually has to do.
+
+        Unlike read_task (which serves the cached title/due/status), this fetches the
+        task page live and returns the teacher's description/instructions, the task
+        labels (e.g. "Summative", "Essay"), the status, the due text, and whether
+        anything has been submitted yet. Costs a login, so use it for a single task
+        the student is actually working on -- use read_agenda to decide which.
+        """
+        return _serialize(action_service.task_details_live(task_id))
+
     @mcp.tool(name="read_task_dropbox", annotations=_RO)
     def read_task_dropbox(task_id: int) -> dict[str, Any]:
         return _serialize(read_service.task_dropbox(task_id))

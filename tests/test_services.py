@@ -48,6 +48,16 @@ class FakeBrowser:
             )
         ]
 
+    def fetch_task_details(self, task_url: str) -> dict:
+        return {
+            "description": "Write the essay.",
+            "labels": ["Summative", "Essay"],
+            "status": "Pending",
+            "due_text": "Tuesday at 8:25 AM",
+            "submission_status": "Not Submitted",
+            "url": task_url,
+        }
+
     def collect_startup_data(self):
         classes = self.fetch_classes()
         tasks_by_class = {cls.class_id: self.fetch_tasks(cls.class_id) for cls in classes}
@@ -176,6 +186,36 @@ def test_parse_due_infers_closest_year_and_handles_garbage():
     assert d is not None and (d.month, d.day, d.hour, d.minute) == (6, 23, 8, 25)
     assert G._parse_due("") is None
     assert G._parse_due("not a date") is None
+
+
+def test_parse_cas_hours_and_dates():
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    assert G._parse_hours("20 hours") == 20.0
+    assert G._parse_hours("1.5 hours") == 1.5
+    assert G._parse_hours("") is None
+    assert G._parse_hours("no number here") is None
+
+    assert G._parse_cas_dates("Mar 09, 2026 \n - \n Mar 21, 2026") == ("2026-03-09", "2026-03-21")
+    assert G._parse_cas_dates("Sep 22, 2025") == ("2025-09-22", None)
+    assert G._parse_cas_dates("") == (None, None)
+
+
+def test_task_details_live():
+    db = build_db()
+    browser = FakeBrowser()
+    SyncService(db, browser).run_startup_sync()
+    action = ActionService(db, browser)
+
+    res = action.task_details_live(47417931 + 12816550)
+    assert res.success
+    assert res.data["description"] == "Write the essay."
+    assert res.data["labels"] == ["Summative", "Essay"]
+    assert res.data["submission_status"] == "Not Submitted"
+
+    missing = action.task_details_live(999999)
+    assert not missing.success
+    assert missing.error_code == "TASK_NOT_FOUND"
 
 
 def test_relative_due_phrasing():
