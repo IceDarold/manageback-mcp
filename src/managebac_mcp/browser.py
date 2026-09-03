@@ -125,12 +125,10 @@ class PlaywrightBrowserGateway:
                 return ""
 
         base = self.config.base_url
-        grab("dashboard", base)
+        grab("timetables", base + "/student/timetables")
+        grab("calendar", base + "/student/calendar")
         grab("classes_index", self.config.route_url("classes_index"))
 
-        deadlines = self.config.build_url(self.config.routes.tasks_and_deadlines)
-        grab("deadlines_p1", deadlines + "?view=overdue")
-        grab("deadlines_p2", deadlines + "?view=overdue&page=2")
 
         # Every nav/sidebar link, so the timetable route reveals itself instead
         # of being guessed.
