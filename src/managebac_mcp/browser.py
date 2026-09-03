@@ -204,7 +204,30 @@ class PlaywrightBrowserGateway:
 
         return self._with_authenticated_browser(_run)
 
+    def _probe_dump(self, page) -> None:
+        """TEMPORARY selector probe -- dumps pages for DOM investigation. Remove after."""
+        import pathlib
+
+        base = "https://theislandprivateschool.managebac.com"
+        out = pathlib.Path("/var/lib/manageback-mcp/probe")
+        out.mkdir(parents=True, exist_ok=True)
+        targets = {
+            "cas_index": self.config.route_url("cas_index"),
+            "cas_detail": f"{base}/student/ib/activity/cas/26331638",
+            "cas_reflections": f"{base}/student/ib/activity/cas/26331638/reflections",
+            "task_detail": f"{base}/student/classes/12816569/core_tasks/48003132",
+        }
+        for name, url in targets.items():
+            try:
+                page.goto(url, timeout=self.config.timeouts_ms.navigation)
+                page.wait_for_timeout(1500)
+                (out / f"{name}.html").write_text(page.content(), encoding="utf-8")
+                (out / f"{name}.txt").write_text(page.inner_text("body"), encoding="utf-8")
+            except Exception as exc:  # probe must never break the real scrape
+                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
+
     def _scrape_cas(self, page) -> list[CasExperienceRecord]:
+        self._probe_dump(page)
         page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)
         links = page.locator("a[href*='/student/ib/activity/cas/']")
         records: list[CasExperienceRecord] = []
