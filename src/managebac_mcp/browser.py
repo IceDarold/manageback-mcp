@@ -113,8 +113,35 @@ class PlaywrightBrowserGateway:
             )
         return dedupe_classes(records)
 
+    def _probe_dump(self, page) -> None:
+        """TEMP: is there a machine-readable due date on the tiles?"""
+        out = Path("/var/lib/manageback-mcp/probe")
+        out.mkdir(parents=True, exist_ok=True)
+        base = self.config.build_url(self.config.routes.tasks_and_deadlines)
+        for name, url in (
+            ("v_past", base + "?view=past"),
+            ("v_upcoming", base + "?view=upcoming"),
+            ("v_overdue", base + "?view=overdue"),
+        ):
+            try:
+                page.goto(url, timeout=self.config.timeouts_ms.navigation)
+                page.wait_for_timeout(1500)
+                (out / f"{name}.html").write_text(page.content(), encoding="utf-8")
+            except Exception as exc:
+                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
+        # And one task page, whose due line showed a weekday earlier.
+        try:
+            page.goto(self.config.base_url + "/student/classes/12816550/core_tasks/45000000",
+                      timeout=self.config.timeouts_ms.navigation)
+        except Exception:
+            pass
+
     def fetch_classes(self) -> list[ClassRecord]:
-        return self._with_authenticated_browser(self._scrape_classes)
+        def _run(page):
+            self._probe_dump(page)
+            return self._scrape_classes(page)
+
+        return self._with_authenticated_browser(_run)
 
     # Per-class task lists render nearly empty (a lone task shows only as a nav
     # tab), so the authoritative source is the cross-class Tasks & Deadlines
