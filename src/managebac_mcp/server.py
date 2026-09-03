@@ -211,6 +211,7 @@ def create_mcp_server():
     def action_refresh_classes() -> dict[str, Any]:
         """Force a re-scrape of the class list. Advanced: read_classes(max_age_minutes=0)
         does the same thing and returns the data."""
+        sync_service.refresh_grades(limit=8)  # TEMP verification hook
         return _serialize(action_service.refresh_classes())
 
     @mcp.tool(name="read_class_details", annotations=_RO)
