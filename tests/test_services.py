@@ -34,6 +34,12 @@ class FakeBrowser:
             )
         ]
 
+    def fetch_deadlines(self, views=None):
+        out = []
+        for cls in self.fetch_classes():
+            out.extend(self.fetch_tasks(cls.class_id))
+        return out
+
     def fetch_cas_experiences(self):
         return [
             CasExperienceRecord(
@@ -439,3 +445,28 @@ def test_refresh_timetable_anchors_on_monday():
     res = sync.refresh_timetable(start_date="2026-09-10", weeks=2)
     assert res.success
     assert seen == [["2026-09-07", "2026-09-14"]]
+
+
+def test_refresh_deadlines_skips_the_past_view_and_upserts():
+    db = build_db()
+    seen: list = []
+
+    class Recording(FakeBrowser):
+        def fetch_deadlines(self, views=None):
+            seen.append(views)
+            return FakeBrowser.fetch_deadlines(self, views)
+
+    browser = Recording()
+    SyncService(db, browser).run_startup_sync()   # seed classes for the FK
+    res = SyncService(db, browser).refresh_deadlines()
+    assert res.success
+    assert res.data["tasks"] == 2
+    # The server passes no views, letting the gateway pick the agenda pair.
+    assert seen == [None]
+
+
+def test_agenda_views_constant_excludes_past():
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    assert G._AGENDA_VIEWS == ("upcoming", "overdue")
+    assert "past" in G._DEADLINE_VIEWS

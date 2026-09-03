@@ -104,6 +104,10 @@ def create_mcp_server():
 
         Advanced/maintenance: the read_* tools refresh themselves via max_age_minutes,
         so prefer read_agenda. Use this only to force a full rebuild of the cache.
+
+        Slow -- it walks every page of every deadline view and can run past a
+        client's timeout while still completing on the server. Do not retry it on
+        timeout; read_agenda afterwards to see the result.
         """
         return _serialize(sync_service.run_startup_sync())
 
@@ -137,7 +141,7 @@ def create_mcp_server():
         max_age_minutes (default 15; pass None to read cache only, or 0 to force a refresh).
         """
         if _is_stale(read_service.tasks_last_seen_any(), max_age_minutes):
-            sync_service.run_startup_sync()
+            sync_service.refresh_deadlines()
         return _serialize(read_service.agenda(view=view, within_days=within_days, subject=subject))
 
     @mcp.tool(name="read_schedule", annotations=_RO)

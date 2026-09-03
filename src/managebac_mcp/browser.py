@@ -48,6 +48,8 @@ class BrowserGateway(Protocol):
 
     def fetch_task_details(self, task_url: str) -> dict: ...
 
+    def fetch_deadlines(self, views: "tuple[str, ...] | None" = None) -> list[TaskRecord]: ...
+
     def fetch_timetable(self, start_dates: list[str]) -> list[LessonRecord]: ...
 
     def collect_startup_data(self) -> "StartupData": ...
@@ -203,12 +205,22 @@ class PlaywrightBrowserGateway:
                 collected[rec.task_id] = rec
         return list(collected.values())
 
-    def _scrape_all_tasks(self, page) -> list[TaskRecord]:
+    # "past" is history: it paginates over the whole year and is not needed to
+    # answer "what is due", so the agenda refresh asks for the other two only.
+    _AGENDA_VIEWS = ("upcoming", "overdue")
+
+    def _scrape_all_tasks(self, page, views: "tuple[str, ...] | None" = None) -> list[TaskRecord]:
         seen: dict[int, TaskRecord] = {}
-        for view in self._DEADLINE_VIEWS:
+        for view in views or self._DEADLINE_VIEWS:
             for rec in self._scrape_deadlines(page, view):
                 seen.setdefault(rec.task_id, rec)
         return list(seen.values())
+
+    def fetch_deadlines(self, views: "tuple[str, ...] | None" = None) -> list[TaskRecord]:
+        """Scrape only the deadline views, skipping classes, CAS and the timetable."""
+        return self._with_authenticated_browser(
+            lambda page: self._scrape_all_tasks(page, views or self._AGENDA_VIEWS)
+        )
 
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]:
         return self._with_authenticated_browser(

@@ -74,6 +74,20 @@ class SyncService:
                 return ToolResult(success=False, message=exc.message, error_code=exc.code, data={"sync_run_id": run.id})
 
 
+    def refresh_deadlines(self, views: tuple[str, ...] | None = None) -> ToolResult:
+        """Refresh just the deadline views -- what read_agenda needs, one login."""
+        with self.db.session() as session:
+            sync_repo = SyncRunRepository(session)
+            run = sync_repo.start()
+            try:
+                tasks = self.browser.fetch_deadlines(views)
+                count = TaskRepository(session).upsert_many(tasks)
+                sync_repo.finish(run, "success")
+                return ToolResult(success=True, message=f"Refreshed {count} task(s)", data={"tasks": count})
+            except AppError as exc:
+                sync_repo.finish(run, "failed", error_code=exc.code, error_message=exc.message)
+                return ToolResult(success=False, message=exc.message, error_code=exc.code)
+
     def refresh_timetable(self, start_date: str | None = None, weeks: int = 2) -> ToolResult:
         """Re-scrape the rotation timetable for `weeks` weeks from the given Monday."""
         anchor = date_cls.fromisoformat(start_date) if start_date else date_cls.today()
