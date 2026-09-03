@@ -114,32 +114,17 @@ class PlaywrightBrowserGateway:
         return dedupe_classes(records)
 
     def _probe_dump(self, page) -> None:
-        """TEMP: look for a mark on individual completed task pages."""
+        """TEMP: check whether deadline tiles carry the mark (bulk source)."""
         out = Path("/var/lib/manageback-mcp/probe")
         out.mkdir(parents=True, exist_ok=True)
-
-        def grab(name: str, url: str) -> str:
+        base = self.config.build_url(self.config.routes.tasks_and_deadlines)
+        for name, url in (("past_p1", base + "?view=past"), ("past_p2", base + "?view=past&page=2")):
             try:
                 page.goto(url, timeout=self.config.timeouts_ms.navigation)
                 page.wait_for_timeout(1500)
-                html = page.content()
-                (out / f"{name}.html").write_text(html, encoding="utf-8")
-                (out / f"{name}.url").write_text(page.url, encoding="utf-8")
-                return html
+                (out / f"{name}.html").write_text(page.content(), encoding="utf-8")
             except Exception as exc:
                 (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
-                return ""
-
-        base = self.config.base_url
-        # Submitted, assessed work is the likeliest place a mark would show.
-        for i, path in enumerate((
-            "/student/classes/12820005/core_tasks/48069565",   # Maths IA (Exploration)
-            "/student/classes/12816550/core_tasks/48157975",   # Russian summative (Individual Oral)
-            "/student/classes/12819910/core_tasks/47660910",   # English Paper 1 Practice
-            "/student/classes/12819910/core_tasks/47962433",   # English awareness day
-        )):
-            grab(f"graded_{i}", base + path)
-            grab(f"graded_{i}_dropbox", base + path + "/dropbox")
 
     def fetch_classes(self) -> list[ClassRecord]:
         def _run(page):
