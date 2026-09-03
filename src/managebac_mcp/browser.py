@@ -532,9 +532,15 @@ class PlaywrightBrowserGateway:
             grade = first_text(".assessment .grade")
             points_text = first_text(".assessment .points")
             earned, possible = self._parse_points(points_text or "")
+            # Known states are labelled; anything else falls back to whatever the
+            # cell says, so an unseen state is reported rather than dropped.
             assessment_status = first_text(
                 ".assessment .cell.not-assessed, .assessment .cell.submitted"
-            ) or ("Assessed" if grade else None)
+            )
+            if not assessment_status:
+                assessment_status = "Assessed" if grade else (
+                    " ".join((first_text(".assessment") or "").split()) or None
+                )
 
             return {
                 "description": first_text(".core-task-details .fr-view"),

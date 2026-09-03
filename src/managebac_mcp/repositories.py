@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Iterable
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.orm import Session
 
 from .schema import (
@@ -158,12 +158,23 @@ class TaskRepository:
         )
 
     def list_for_grading(self, limit: int, before: datetime) -> list[TaskEntity]:
-        """Past tasks to check for a mark, never-checked ones first."""
+        """Past tasks to check for a mark, most promising first.
+
+        Only submitted work can carry a mark, and the deadline tiles already tell
+        us which tasks those are -- so they go first, ahead of the far larger pile
+        of tasks that were never handed in. Within each group, never-checked
+        before rechecked, then most recent.
+        """
+        submitted_first = case((TaskEntity.status == "Submitted", 0), else_=1)
         return list(
             self.session.execute(
                 select(TaskEntity)
                 .where(TaskEntity.due_at.is_not(None), TaskEntity.due_at <= before)
-                .order_by(TaskEntity.graded_at.asc().nulls_first(), TaskEntity.due_at.desc())
+                .order_by(
+                    submitted_first,
+                    TaskEntity.graded_at.asc().nulls_first(),
+                    TaskEntity.due_at.desc(),
+                )
                 .limit(limit)
             ).scalars().all()
         )

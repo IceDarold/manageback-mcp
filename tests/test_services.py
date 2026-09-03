@@ -584,3 +584,34 @@ def test_task_details_live_persists_the_mark():
         row = TaskRepository(session).get(task_id)
         assert (row.grade, row.points_earned, row.points_possible) == ("5", 29.0, 40.0)
         assert row.graded_at is not None
+
+
+def test_grading_sweep_prefers_submitted_work():
+    """Only handed-in work can carry a mark, so it must be checked first."""
+    from managebac_mcp.repositories import ClassRepository, TaskRepository
+
+    db = build_db()
+    with db.session() as session:
+        ClassRepository(session).upsert_many(
+            [ClassRecord(class_id=100, title="Maths", teacher="A", url="u", raw_hash="h")]
+        )
+        TaskRepository(session).upsert_many(
+            [
+                TaskRecord(task_id=1, class_id=100, title="Old submitted",
+                           due_at=datetime(2026, 5, 1, 9, 0), status="Submitted",
+                           url="u1", dropbox_url="d", raw_hash="r"),
+                TaskRecord(task_id=2, class_id=100, title="Recent pending",
+                           due_at=datetime(2026, 9, 1, 9, 0), status="Pending",
+                           url="u2", dropbox_url="d", raw_hash="r"),
+                TaskRecord(task_id=3, class_id=100, title="Recent unmarked",
+                           due_at=datetime(2026, 9, 2, 9, 0), status=None,
+                           url="u3", dropbox_url="d", raw_hash="r"),
+            ]
+        )
+
+    with db.session() as session:
+        # Ids read inside the session; the rows detach when it closes.
+        order = [r.task_id for r in TaskRepository(session).list_for_grading(3, datetime(2026, 9, 10))]
+
+    # The old submitted task outranks both newer ones that were never handed in.
+    assert order == [1, 3, 2]
