@@ -88,6 +88,51 @@ class SyncService:
                 sync_repo.finish(run, "failed", error_code=exc.code, error_message=exc.message)
                 return ToolResult(success=False, message=exc.message, error_code=exc.code)
 
+    def refresh_grades(self, limit: int = 15, now: datetime | None = None) -> ToolResult:
+        """Visit a bounded batch of past tasks and record any marks found.
+
+        Marks exist only on a task's own page, so this costs one page load per
+        task. The batch is capped to stay inside a caller's timeout; running it
+        again picks up where it left off, oldest-unchecked first.
+        """
+        now = now or datetime.now()
+        with self.db.session() as session:
+            repo = TaskRepository(session)
+            targets = [(t.task_id, t.url, t.title) for t in repo.list_for_grading(max(1, limit), now)]
+
+        if not targets:
+            return ToolResult(success=True, message="No past tasks to check", data={"checked": 0, "graded": 0})
+
+        checked = graded = 0
+        results: list[dict] = []
+        for task_id, url, title in targets:
+            try:
+                details = self.browser.fetch_task_details(url)
+            except AppError as exc:
+                return ToolResult(
+                    success=False, message=exc.message, error_code=exc.code,
+                    data={"checked": checked, "graded": graded},
+                )
+            checked += 1
+            with self.db.session() as session:
+                TaskRepository(session).set_assessment(
+                    task_id,
+                    details.get("grade"),
+                    details.get("points_earned"),
+                    details.get("points_possible"),
+                    details.get("assessment_status"),
+                )
+            if details.get("grade"):
+                graded += 1
+                results.append({"task_id": task_id, "title": title, "grade": details.get("grade"),
+                                "points": details.get("points")})
+
+        return ToolResult(
+            success=True,
+            message=f"Checked {checked} task(s), found {graded} mark(s)",
+            data={"checked": checked, "graded": graded, "new_grades": results},
+        )
+
     def refresh_timetable(self, start_date: str | None = None, weeks: int = 2) -> ToolResult:
         """Re-scrape the rotation timetable for `weeks` weeks from the given Monday."""
         anchor = date_cls.fromisoformat(start_date) if start_date else date_cls.today()
@@ -129,6 +174,53 @@ class ReadService:
     def tasks_last_seen_any(self) -> "datetime | None":
         with self.db.session() as session:
             return TaskRepository(session).max_last_seen_any()
+
+    def grades(self, subject: str | None = None) -> ToolResult:
+        """Marks recorded so far, newest first, with how much of the year is covered."""
+        with self.db.session() as session:
+            class_map = {c.class_id: c.title for c in ClassRepository(session).list_all()}
+            repo = TaskRepository(session)
+            rows = []
+            for task in repo.list_assessed():
+                class_name = class_map.get(task.class_id, str(task.class_id))
+                if subject and subject.lower() not in class_name.lower():
+                    continue
+                rows.append(
+                    {
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "class_id": task.class_id,
+                        "class_name": class_name,
+                        "grade": task.grade,
+                        "points_earned": task.points_earned,
+                        "points_possible": task.points_possible,
+                        "due_at": task.due_at.isoformat() if task.due_at else None,
+                        "url": task.url,
+                    }
+                )
+            all_tasks = repo.list_all()
+            checked = sum(1 for t in all_tasks if t.graded_at is not None)
+            total = len(all_tasks)
+
+        by_class: dict[str, list[float]] = {}
+        for row in rows:
+            try:
+                by_class.setdefault(row["class_name"], []).append(float(row["grade"]))
+            except (TypeError, ValueError):
+                continue
+        averages = {name: round(sum(v) / len(v), 2) for name, v in by_class.items() if v}
+
+        return ToolResult(
+            success=True,
+            message=f"{len(rows)} mark(s) recorded",
+            data={
+                "grades": rows,
+                "average_by_class": averages,
+                # Marks are gathered a batch at a time, so say how complete this is
+                # rather than let an average look more authoritative than it is.
+                "coverage": {"tasks_checked": checked, "tasks_total": total},
+            },
+        )
 
     def lessons_last_seen(self) -> datetime | None:
         with self.db.session() as session:
@@ -539,6 +631,15 @@ class ActionService:
                 return ToolResult(success=False, message=f"Task {task_id} not found", error_code=TASK_NOT_FOUND)
             url, title = task.url, task.title
         details = self.browser.fetch_task_details(url)
+        # Reading the page is the only way to see a mark, so never waste the visit.
+        with self.db.session() as session:
+            TaskRepository(session).set_assessment(
+                task_id,
+                details.get("grade"),
+                details.get("points_earned"),
+                details.get("points_possible"),
+                details.get("assessment_status"),
+            )
         return ToolResult(
             success=True,
             message=f"Task details for '{title}'",

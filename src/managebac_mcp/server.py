@@ -144,6 +144,30 @@ def create_mcp_server():
             sync_service.refresh_deadlines()
         return _serialize(read_service.agenda(view=view, within_days=within_days, subject=subject))
 
+    @mcp.tool(name="read_grades", annotations=_RO)
+    def read_grades(subject: str | None = None) -> dict[str, Any]:
+        """Marks recorded so far, newest first, plus an average per class.
+
+        This school's ManageBac shows no gradebook to students: a mark exists only
+        on the task's own page. So grades are collected a batch at a time by
+        action_refresh_grades and served from cache here. The coverage field says
+        how many tasks have been checked out of the total -- read it before
+        treating an average as the student's real standing.
+
+        subject is a case-insensitive class-name filter (e.g. "math").
+        """
+        return _serialize(read_service.grades(subject=subject))
+
+    @mcp.tool(name="action_refresh_grades", annotations=_WR)
+    def action_refresh_grades(limit: int = 15) -> dict[str, Any]:
+        """Check a batch of past tasks for marks and record what is found.
+
+        Costs one page load per task, so limit is capped to stay inside the
+        caller's timeout; call it again to continue, oldest-unchecked first.
+        Read the results with read_grades.
+        """
+        return _serialize(sync_service.refresh_grades(limit=min(max(1, limit), 25)))
+
     @mcp.tool(name="read_schedule", annotations=_RO)
     def read_schedule(
         date: str | None = None,

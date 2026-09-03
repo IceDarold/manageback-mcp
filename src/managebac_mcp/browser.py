@@ -113,25 +113,8 @@ class PlaywrightBrowserGateway:
             )
         return dedupe_classes(records)
 
-    def _probe_dump(self, page) -> None:
-        """TEMP: check whether deadline tiles carry the mark (bulk source)."""
-        out = Path("/var/lib/manageback-mcp/probe")
-        out.mkdir(parents=True, exist_ok=True)
-        base = self.config.build_url(self.config.routes.tasks_and_deadlines)
-        for name, url in (("past_p1", base + "?view=past"), ("past_p2", base + "?view=past&page=2")):
-            try:
-                page.goto(url, timeout=self.config.timeouts_ms.navigation)
-                page.wait_for_timeout(1500)
-                (out / f"{name}.html").write_text(page.content(), encoding="utf-8")
-            except Exception as exc:
-                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
-
     def fetch_classes(self) -> list[ClassRecord]:
-        def _run(page):
-            self._probe_dump(page)
-            return self._scrape_classes(page)
-
-        return self._with_authenticated_browser(_run)
+        return self._with_authenticated_browser(self._scrape_classes)
 
     # Per-class task lists render nearly empty (a lone task shows only as a nav
     # tab), so the authoritative source is the cross-class Tasks & Deadlines
@@ -314,6 +297,17 @@ class PlaywrightBrowserGateway:
             except ValueError:
                 continue
         return (parsed[0] if parsed else None, parsed[1] if len(parsed) > 1 else None)
+
+    @staticmethod
+    def _parse_points(text: str) -> tuple["float | None", "float | None"]:
+        """"29 / 40 pts" -> (29.0, 40.0)."""
+        m = re.search(r"([\d.]+)\s*/\s*([\d.]+)", text or "")
+        if not m:
+            return (None, None)
+        try:
+            return (float(m.group(1)), float(m.group(2)))
+        except ValueError:
+            return (None, None)
 
     @staticmethod
     def _parse_time_range(text: str) -> tuple["str | None", "str | None"]:
@@ -533,9 +527,23 @@ class PlaywrightBrowserGateway:
                     }
                 )
 
+            # Three shapes in the assessment cell: an awarded grade with its
+            # points, "Complete" (submitted, unmarked), or "Not Assessed Yet".
+            grade = first_text(".assessment .grade")
+            points_text = first_text(".assessment .points")
+            earned, possible = self._parse_points(points_text or "")
+            assessment_status = first_text(
+                ".assessment .cell.not-assessed, .assessment .cell.submitted"
+            ) or ("Assessed" if grade else None)
+
             return {
                 "description": first_text(".core-task-details .fr-view"),
                 "attachments": attachments,
+                "grade": grade,
+                "points": points_text,
+                "points_earned": earned,
+                "points_possible": possible,
+                "assessment_status": assessment_status,
                 "labels": all_texts(".label-and-due .label"),
                 # HL/SL subject badges sit in the same row, so key off the
                 # tooltip attribute the status badge alone carries.

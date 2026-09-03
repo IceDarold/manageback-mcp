@@ -508,3 +508,79 @@ def test_scrape_deadlines_respects_the_page_cap():
     # Every page yields something new, so only the cap can stop the walk.
     assert len(page.urls) == 3
     assert sorted(r.task_id for r in records) == [1, 2, 3]
+
+
+def test_parse_points():
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    assert G._parse_points("29 / 40 pts") == (29.0, 40.0)
+    assert G._parse_points("6 / 7 pts") == (6.0, 7.0)
+    assert G._parse_points("") == (None, None)
+    assert G._parse_points("Not Assessed Yet") == (None, None)
+
+
+def test_refresh_grades_is_bounded_and_resumes():
+    """A batch stops at the limit, and the next one moves on to unchecked tasks."""
+    from managebac_mcp.repositories import ClassRepository, TaskRepository
+
+    db = build_db()
+    visited: list[str] = []
+
+    class Grading(FakeBrowser):
+        def fetch_task_details(self, task_url: str) -> dict:
+            visited.append(task_url)
+            return {"grade": "6", "points_earned": 6.0, "points_possible": 7.0,
+                    "assessment_status": "Assessed"}
+
+    with db.session() as session:
+        ClassRepository(session).upsert_many(
+            [ClassRecord(class_id=100, title="Mathematics HL", teacher="A", url="u", raw_hash="h")]
+        )
+        TaskRepository(session).upsert_many(
+            [
+                TaskRecord(task_id=i, class_id=100, title=f"Task {i}",
+                           due_at=datetime(2026, 8, i + 1, 9, 0), status="Pending",
+                           url=f"https://x/task/{i}", dropbox_url="d", raw_hash="r")
+                for i in range(1, 6)
+            ]
+        )
+
+    sync = SyncService(db, Grading())
+    now = datetime(2026, 9, 10, 12, 0)
+
+    first = sync.refresh_grades(limit=2, now=now)
+    assert first.data["checked"] == 2 and first.data["graded"] == 2
+    assert len(visited) == 2
+
+    second = sync.refresh_grades(limit=2, now=now)
+    # Already-checked tasks sort last, so the second batch sees different ones.
+    assert set(visited[:2]).isdisjoint(set(visited[2:]))
+
+    read = ReadService(db)
+    res = read.grades()
+    assert len(res.data["grades"]) == 4
+    assert res.data["average_by_class"]["Mathematics HL"] == 6.0
+    assert res.data["coverage"] == {"tasks_checked": 4, "tasks_total": 5}
+
+    assert read.grades(subject="biology").data["grades"] == []
+
+
+def test_task_details_live_persists_the_mark():
+    from managebac_mcp.repositories import TaskRepository
+
+    db = build_db()
+
+    class Graded(FakeBrowser):
+        def fetch_task_details(self, task_url: str) -> dict:
+            return {"grade": "5", "points_earned": 29.0, "points_possible": 40.0,
+                    "assessment_status": "Assessed"}
+
+    browser = Graded()
+    SyncService(db, browser).run_startup_sync()
+    task_id = 47417931 + 12816550
+    ActionService(db, browser).task_details_live(task_id)
+
+    with db.session() as session:
+        row = TaskRepository(session).get(task_id)
+        assert (row.grade, row.points_earned, row.points_possible) == ("5", 29.0, 40.0)
+        assert row.graded_at is not None

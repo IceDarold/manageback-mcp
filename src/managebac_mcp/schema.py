@@ -47,6 +47,13 @@ class TaskEntity(Base):
     status: Mapped[Optional[str]] = mapped_column(String(128))
     url: Mapped[str] = mapped_column(Text, nullable=False)
     dropbox_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # Marks live only on a task's own page -- neither the deadline tiles nor any
+    # class page carries them -- so they are filled in as pages get read.
+    grade: Mapped[Optional[str]] = mapped_column(String(32))
+    points_earned: Mapped[Optional[float]] = mapped_column(Float)
+    points_possible: Mapped[Optional[float]] = mapped_column(Float)
+    assessment_status: Mapped[Optional[str]] = mapped_column(String(64))
+    graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 

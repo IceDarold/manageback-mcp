@@ -128,6 +128,46 @@ class TaskRepository:
             select(func.max(TaskEntity.last_seen_at)).where(TaskEntity.class_id == class_id)
         ).scalar()
 
+    def set_assessment(
+        self,
+        task_id: int,
+        grade: str | None,
+        points_earned: float | None,
+        points_possible: float | None,
+        assessment_status: str | None,
+    ) -> bool:
+        row = self.get(task_id)
+        if row is None:
+            return False
+        row.grade = grade
+        row.points_earned = points_earned
+        row.points_possible = points_possible
+        row.assessment_status = assessment_status
+        # Stamped even when nothing was awarded, so the next sweep moves on to
+        # tasks that have never been looked at.
+        row.graded_at = _now()
+        return True
+
+    def list_assessed(self) -> list[TaskEntity]:
+        return list(
+            self.session.execute(
+                select(TaskEntity)
+                .where(TaskEntity.grade.is_not(None))
+                .order_by(TaskEntity.due_at.desc().nulls_last())
+            ).scalars().all()
+        )
+
+    def list_for_grading(self, limit: int, before: datetime) -> list[TaskEntity]:
+        """Past tasks to check for a mark, never-checked ones first."""
+        return list(
+            self.session.execute(
+                select(TaskEntity)
+                .where(TaskEntity.due_at.is_not(None), TaskEntity.due_at <= before)
+                .order_by(TaskEntity.graded_at.asc().nulls_first(), TaskEntity.due_at.desc())
+                .limit(limit)
+            ).scalars().all()
+        )
+
     def max_last_seen_any(self) -> datetime | None:
         return self.session.execute(select(func.max(TaskEntity.last_seen_at))).scalar()
 
