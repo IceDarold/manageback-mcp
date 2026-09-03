@@ -276,3 +276,82 @@ def test_agenda_views_and_subject_filter():
 
     window = read.agenda(within_days=3, now=now)
     assert [t["task_id"] for t in window.data["tasks"]] == [2]
+
+
+def test_scrape_deadlines_walks_pages_and_stops():
+    """Pagination must gather every page yet stop as soon as a page adds nothing."""
+    import pathlib
+
+    from managebac_mcp.browser import PlaywrightBrowserGateway
+    from managebac_mcp.config import load_managebac_config
+
+    config = load_managebac_config(pathlib.Path("config/managebac.yaml"))
+
+    class FakePage:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        def goto(self, url, timeout=None):
+            self.urls.append(url)
+
+        def wait_for_timeout(self, ms):
+            pass
+
+    def task(task_id: int) -> TaskRecord:
+        return TaskRecord(
+            task_id=task_id, class_id=1, title=f"T{task_id}", due_at=None,
+            status=None, url="u", dropbox_url="d", raw_hash="r",
+        )
+
+    # Two full pages, then a page that only repeats what we already have.
+    pages = {1: [task(1), task(2)], 2: [task(3)], 3: [task(3)]}
+
+    class Gateway(PlaywrightBrowserGateway):
+        def _parse_deadline_tiles(self, page):
+            return pages.get(len(page.urls), [])
+
+    gw = Gateway(config)
+    page = FakePage()
+    records = gw._scrape_deadlines(page, "overdue")
+
+    assert sorted(r.task_id for r in records) == [1, 2, 3]
+    # Stopped on the repeat page rather than walking to the cap.
+    assert len(page.urls) == 3
+    assert "page=" not in page.urls[0]
+    assert page.urls[1].endswith("&page=2")
+
+
+def test_scrape_deadlines_stops_when_page_param_ignored():
+    """If the site ignored ?page, the identical second page must end the loop."""
+    import pathlib
+
+    from managebac_mcp.browser import PlaywrightBrowserGateway
+    from managebac_mcp.config import load_managebac_config
+
+    config = load_managebac_config(pathlib.Path("config/managebac.yaml"))
+
+    class FakePage:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        def goto(self, url, timeout=None):
+            self.urls.append(url)
+
+        def wait_for_timeout(self, ms):
+            pass
+
+    same = [
+        TaskRecord(task_id=7, class_id=1, title="T", due_at=None, status=None,
+                   url="u", dropbox_url="d", raw_hash="r")
+    ]
+
+    class Gateway(PlaywrightBrowserGateway):
+        def _parse_deadline_tiles(self, page):
+            return list(same)
+
+    gw = Gateway(config)
+    page = FakePage()
+    records = gw._scrape_deadlines(page, "upcoming")
+
+    assert [r.task_id for r in records] == [7]
+    assert len(page.urls) == 2  # page 1, then the duplicate page 2 stops it

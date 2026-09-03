@@ -104,8 +104,58 @@ class PlaywrightBrowserGateway:
             )
         return dedupe_classes(records)
 
+    def _probe_dump(self, page) -> None:
+        """TEMP: capture pages needed to add the timetable + attachments."""
+        import json as _json
+        import re as _re
+
+        out = Path("/var/lib/manageback-mcp/probe")
+        out.mkdir(parents=True, exist_ok=True)
+
+        def grab(name: str, url: str) -> str:
+            try:
+                page.goto(url, timeout=self.config.timeouts_ms.navigation)
+                page.wait_for_timeout(1200)
+                html = page.content()
+                (out / f"{name}.html").write_text(html, encoding="utf-8")
+                (out / f"{name}.url").write_text(page.url, encoding="utf-8")
+                return html
+            except Exception as exc:  # probe must never break the real sync
+                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
+                return ""
+
+        base = self.config.base_url
+        grab("dashboard", base)
+        grab("classes_index", self.config.route_url("classes_index"))
+
+        deadlines = self.config.build_url(self.config.routes.tasks_and_deadlines)
+        grab("deadlines_p1", deadlines + "?view=overdue")
+        grab("deadlines_p2", deadlines + "?view=overdue&page=2")
+
+        # Every nav/sidebar link, so the timetable route reveals itself instead
+        # of being guessed.
+        try:
+            page.goto(self.config.route_url("classes_index"), timeout=self.config.timeouts_ms.navigation)
+            page.wait_for_timeout(1000)
+            links = page.eval_on_selector_all(
+                "a[href]", "els => els.map(e => [e.getAttribute('href'), (e.innerText||'').trim()])"
+            )
+            (out / "links.json").write_text(_json.dumps(links, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception as exc:
+            (out / "links.error").write_text(repr(exc), encoding="utf-8")
+
+        # One real task page, for the attachment markup.
+        html = grab("deadlines_for_task", deadlines + "?view=past")
+        m = _re.search(r"/student/classes/(\d+)/core_tasks/(\d+)", html or "")
+        if m:
+            grab("task_page", self.config.build_url(m.group(0)))
+
     def fetch_classes(self) -> list[ClassRecord]:
-        return self._with_authenticated_browser(self._scrape_classes)
+        def _run(page):
+            self._probe_dump(page)
+            return self._scrape_classes(page)
+
+        return self._with_authenticated_browser(_run)
 
     # Per-class task lists render nearly empty (a lone task shows only as a nav
     # tab), so the authoritative source is the cross-class Tasks & Deadlines
@@ -138,10 +188,7 @@ class PlaywrightBrowserGateway:
             return best
         return None
 
-    def _scrape_deadlines(self, page, view: str) -> list[TaskRecord]:
-        url = self.config.build_url(self.config.routes.tasks_and_deadlines) + f"?view={view}"
-        page.goto(url, timeout=self.config.timeouts_ms.navigation)
-        page.wait_for_timeout(500)
+    def _parse_deadline_tiles(self, page) -> list[TaskRecord]:
         tiles = page.locator("div.f-tile__body")
         records: list[TaskRecord] = []
         for i in range(tiles.count()):
@@ -180,6 +227,26 @@ class PlaywrightBrowserGateway:
                 )
             )
         return records
+
+    # Each view renders ~10 tiles per page, so a single fetch silently truncated
+    # the agenda (the overdue badge showed 99). Walking ?page=N needs no
+    # knowledge of the pager markup, and if the param were ever ignored the
+    # repeated ids stop the loop on page 2 rather than spinning.
+    _MAX_DEADLINE_PAGES = 25
+
+    def _scrape_deadlines(self, page, view: str) -> list[TaskRecord]:
+        base = self.config.build_url(self.config.routes.tasks_and_deadlines) + f"?view={view}"
+        collected: dict[int, TaskRecord] = {}
+        for page_no in range(1, self._MAX_DEADLINE_PAGES + 1):
+            url = base if page_no == 1 else f"{base}&page={page_no}"
+            page.goto(url, timeout=self.config.timeouts_ms.navigation)
+            page.wait_for_timeout(500)
+            fresh = [r for r in self._parse_deadline_tiles(page) if r.task_id not in collected]
+            if not fresh:
+                break
+            for rec in fresh:
+                collected[rec.task_id] = rec
+        return list(collected.values())
 
     def _scrape_all_tasks(self, page) -> list[TaskRecord]:
         seen: dict[int, TaskRecord] = {}
