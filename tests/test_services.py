@@ -57,6 +57,7 @@ class FakeBrowser:
     def fetch_task_details(self, task_url: str) -> dict:
         return {
             "description": "Write the essay.",
+            "attachments": [{"name": "brief.pdf", "url": "https://x/attachments/abc", "size": "1.03 MB"}],
             "labels": ["Summative", "Essay"],
             "status": "Pending",
             "due_text": "Tuesday at 8:25 AM",
@@ -226,6 +227,7 @@ def test_task_details_live():
     assert res.success
     assert res.data["description"] == "Write the essay."
     assert res.data["labels"] == ["Summative", "Essay"]
+    assert res.data["attachments"][0]["name"] == "brief.pdf"
     assert res.data["submission_status"] == "Not Submitted"
 
     missing = action.task_details_live(999999)

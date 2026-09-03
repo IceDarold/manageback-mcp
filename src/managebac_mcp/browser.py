@@ -488,7 +488,7 @@ class PlaywrightBrowserGateway:
 
         def _run(page):
             page.goto(task_url, timeout=self.config.timeouts_ms.navigation)
-            page.wait_for_timeout(800)
+            self._await_tiles(page, ".core-task-details", timeout_ms=5000)
 
             def first_text(selector: str) -> "str | None":
                 loc = page.locator(selector).first
@@ -498,8 +498,27 @@ class PlaywrightBrowserGateway:
                 loc = page.locator(selector)
                 return [t for t in (loc.nth(i).inner_text().strip() for i in range(loc.count())) if t]
 
+            # Teacher-attached material: the brief, mark schemes, past papers.
+            # Links carry the display name in data-name and the size in a span.
+            attachments = []
+            files = page.locator("a.fr-file[data-name]")
+            for i in range(files.count()):
+                link = files.nth(i)
+                href = link.get_attribute("href")
+                if not href:
+                    continue
+                size_el = link.locator(".fr-file-size").first
+                attachments.append(
+                    {
+                        "name": link.get_attribute("data-name"),
+                        "url": href,
+                        "size": size_el.inner_text().strip() if size_el.count() > 0 else None,
+                    }
+                )
+
             return {
                 "description": first_text(".core-task-details .fr-view"),
+                "attachments": attachments,
                 "labels": all_texts(".label-and-due .label"),
                 # HL/SL subject badges sit in the same row, so key off the
                 # tooltip attribute the status badge alone carries.
