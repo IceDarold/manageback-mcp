@@ -113,35 +113,8 @@ class PlaywrightBrowserGateway:
             )
         return dedupe_classes(records)
 
-    def _probe_dump(self, page) -> None:
-        """TEMP: is there a machine-readable due date on the tiles?"""
-        out = Path("/var/lib/manageback-mcp/probe")
-        out.mkdir(parents=True, exist_ok=True)
-        base = self.config.build_url(self.config.routes.tasks_and_deadlines)
-        for name, url in (
-            ("v_past", base + "?view=past"),
-            ("v_upcoming", base + "?view=upcoming"),
-            ("v_overdue", base + "?view=overdue"),
-        ):
-            try:
-                page.goto(url, timeout=self.config.timeouts_ms.navigation)
-                page.wait_for_timeout(1500)
-                (out / f"{name}.html").write_text(page.content(), encoding="utf-8")
-            except Exception as exc:
-                (out / f"{name}.error").write_text(repr(exc), encoding="utf-8")
-        # And one task page, whose due line showed a weekday earlier.
-        try:
-            page.goto(self.config.base_url + "/student/classes/12816550/core_tasks/45000000",
-                      timeout=self.config.timeouts_ms.navigation)
-        except Exception:
-            pass
-
     def fetch_classes(self) -> list[ClassRecord]:
-        def _run(page):
-            self._probe_dump(page)
-            return self._scrape_classes(page)
-
-        return self._with_authenticated_browser(_run)
+        return self._with_authenticated_browser(self._scrape_classes)
 
     # Per-class task lists render nearly empty (a lone task shows only as a nav
     # tab), so the authoritative source is the cross-class Tasks & Deadlines
@@ -149,11 +122,23 @@ class PlaywrightBrowserGateway:
     _DEADLINE_VIEWS = ("upcoming", "overdue", "past")
 
     @staticmethod
-    def _parse_due(text: str) -> "datetime | None":
+    def _parse_due(
+        text: str, now: "datetime | None" = None, direction: "str | None" = None
+    ) -> "datetime | None":
+        """Resolve a ManageBac due date, which usually carries no year.
+
+        Guessing the calendar-nearest year silently moved last autumn's work a
+        year forward: on 3 Sep 2026, "Sep 10" reads as next week rather than
+        last September. Nothing on the page disambiguates it -- there is no
+        <time>, datetime or title attribute anywhere -- but the list it came
+        from does: "upcoming" is future by definition, "overdue" and "past" are
+        not. `direction` carries that, and only a caller with no such context
+        falls back to the nearest year.
+        """
         text = (text or "").strip()
         if not text:
             return None
-        now = datetime.now()
+        now = now or datetime.now()
         for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %I:%M %p", "%b %d"):
             try:
                 parsed = datetime.strptime(text, fmt)
@@ -161,20 +146,26 @@ class PlaywrightBrowserGateway:
                 continue
             if "%Y" in fmt:
                 return parsed
-            # Year-less format: choose the year landing the date closest to now
-            # (handles both overdue past and upcoming future).
-            best = None
-            for year in (now.year - 1, now.year, now.year + 1):
+
+            candidates = []
+            for year in range(now.year - 2, now.year + 2):
                 try:
-                    candidate = parsed.replace(year=year)
-                except ValueError:
+                    candidates.append(parsed.replace(year=year))
+                except ValueError:  # 29 Feb in a non-leap year
                     continue
-                if best is None or abs((candidate - now).days) < abs((best - now).days):
-                    best = candidate
-            return best
+            if not candidates:
+                return None
+
+            if direction == "past":
+                earlier = [c for c in candidates if c <= now]
+                return max(earlier) if earlier else min(candidates)
+            if direction == "future":
+                later = [c for c in candidates if c >= now]
+                return min(later) if later else max(candidates)
+            return min(candidates, key=lambda c: abs((c - now).total_seconds()))
         return None
 
-    def _parse_deadline_tiles(self, page) -> list[TaskRecord]:
+    def _parse_deadline_tiles(self, page, direction: "str | None" = None) -> list[TaskRecord]:
         tiles = page.locator("div.f-tile__body")
         records: list[TaskRecord] = []
         for i in range(tiles.count()):
@@ -205,7 +196,7 @@ class PlaywrightBrowserGateway:
                     task_id=task_id,
                     class_id=class_id,
                     title=title,
-                    due_at=self._parse_due(due_text),
+                    due_at=self._parse_due(due_text, direction=direction),
                     status=status,
                     url=self.config.build_url(href),
                     dropbox_url=dropbox_url,
@@ -239,7 +230,10 @@ class PlaywrightBrowserGateway:
             url = base if page_no == 1 else f"{base}&page={page_no}"
             page.goto(url, timeout=self.config.timeouts_ms.navigation)
             self._await_tiles(page, "div.f-tile__body")
-            fresh = [r for r in self._parse_deadline_tiles(page) if r.task_id not in collected]
+            fresh = [
+                r for r in self._parse_deadline_tiles(page, self._DIRECTIONS.get(view))
+                if r.task_id not in collected
+            ]
             if not fresh:
                 break
             for rec in fresh:
@@ -249,6 +243,9 @@ class PlaywrightBrowserGateway:
     # "past" is history: it paginates over the whole year and is not needed to
     # answer "what is due", so the agenda refresh asks for the other two only.
     _AGENDA_VIEWS = ("upcoming", "overdue")
+
+    # Which side of today each list is guaranteed to sit on.
+    _DIRECTIONS = {"upcoming": "future", "overdue": "past", "past": "past"}
 
     def _scrape_all_tasks(
         self, page, views: "tuple[str, ...] | None" = None, max_pages: int | None = None

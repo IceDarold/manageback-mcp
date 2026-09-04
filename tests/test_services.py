@@ -324,7 +324,7 @@ def test_scrape_deadlines_walks_pages_and_stops():
     pages = {1: [task(1), task(2)], 2: [task(3)], 3: [task(3)]}
 
     class Gateway(PlaywrightBrowserGateway):
-        def _parse_deadline_tiles(self, page):
+        def _parse_deadline_tiles(self, page, direction=None):
             return pages.get(len(page.urls), [])
 
     gw = Gateway(config)
@@ -363,7 +363,7 @@ def test_scrape_deadlines_stops_when_page_param_ignored():
     ]
 
     class Gateway(PlaywrightBrowserGateway):
-        def _parse_deadline_tiles(self, page):
+        def _parse_deadline_tiles(self, page, direction=None):
             return list(same)
 
     gw = Gateway(config)
@@ -494,7 +494,7 @@ def test_scrape_deadlines_respects_the_page_cap():
             return None
 
     class Gateway(PlaywrightBrowserGateway):
-        def _parse_deadline_tiles(self, page):
+        def _parse_deadline_tiles(self, page, direction=None):
             n = len(page.urls)
             return [
                 TaskRecord(task_id=n, class_id=1, title=f"T{n}", due_at=None, status=None,
@@ -622,3 +622,75 @@ def test_grading_sweep_prefers_submitted_work():
     # Submitted work leads, newest first; work still to come and never handed in
     # (task 5) is not worth a page load at all.
     assert order == [4, 1, 3, 2]
+
+
+def test_parse_due_uses_the_list_direction_for_the_missing_year():
+    """ManageBac omits the year; the view a tile came from settles which one."""
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    now = datetime(2026, 9, 3, 12, 0)  # a Thursday, early in the new school year
+
+    # Real cases from the connector's own bad data. ManageBac renders these with
+    # a weekday, which is what pinned the correct year down.
+    pushkin = G._parse_due("Sep 10, 8:25 AM", now=now, direction="past")
+    assert pushkin == datetime(2025, 9, 10, 8, 25)
+    assert pushkin.strftime("%A") == "Wednesday"
+
+    series = G._parse_due("Sep 8, 9:50 AM", now=now, direction="past")
+    assert series == datetime(2025, 9, 8, 9, 50)
+    assert series.strftime("%A") == "Monday"
+
+    # Nearest-year put both a week into the future -- the bug being fixed.
+    assert G._parse_due("Sep 10, 8:25 AM", now=now) == datetime(2026, 9, 10, 8, 25)
+
+    # Last term's work is recent enough that both rules agree.
+    assert G._parse_due("Jun 24, 8:40 AM", now=now, direction="past") == datetime(2026, 6, 24, 8, 40)
+
+    # A genuine upcoming deadline resolves forward, across a year boundary too.
+    assert G._parse_due("Sep 10, 8:25 AM", now=now, direction="future") == datetime(2026, 9, 10, 8, 25)
+    assert G._parse_due("Feb 3, 9:00 AM", now=now, direction="future") == datetime(2027, 2, 3, 9, 0)
+
+    # An explicit year always wins, and garbage still yields nothing.
+    assert G._parse_due("Jun 23, 2024, 8:25 AM", now=now, direction="future") == datetime(2024, 6, 23, 8, 25)
+    assert G._parse_due("not a date", now=now, direction="past") is None
+    assert G._parse_due("", now=now, direction="past") is None
+
+
+def test_every_scraped_view_declares_its_side_of_today():
+    from managebac_mcp.browser import PlaywrightBrowserGateway as G
+
+    assert G._DIRECTIONS["upcoming"] == "future"
+    assert G._DIRECTIONS["overdue"] == "past"
+    assert G._DIRECTIONS["past"] == "past"
+    # A new view without a direction would silently fall back to nearest-year.
+    assert set(G._DEADLINE_VIEWS) <= set(G._DIRECTIONS)
+
+
+def test_scrape_deadlines_passes_the_direction_of_its_view():
+    import pathlib
+
+    from managebac_mcp.browser import PlaywrightBrowserGateway
+    from managebac_mcp.config import load_managebac_config
+
+    config = load_managebac_config(pathlib.Path("config/managebac.yaml"))
+    seen: list = []
+
+    class FakePage:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        def goto(self, url, timeout=None):
+            self.urls.append(url)
+
+        def wait_for_selector(self, selector, timeout=None):
+            return None
+
+    class Gateway(PlaywrightBrowserGateway):
+        def _parse_deadline_tiles(self, page, direction=None):
+            seen.append(direction)
+            return []
+
+    gw = Gateway(config)
+    gw._scrape_deadlines(FakePage(), "past")
+    gw._scrape_deadlines(FakePage(), "upcoming")
+    assert seen == ["past", "future"]
