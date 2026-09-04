@@ -334,8 +334,13 @@ def create_mcp_server():
 
     @mcp.tool(name="action_create_cas_experience", annotations=_WR)
     def action_create_cas_experience(payload: dict[str, Any]) -> dict[str, Any]:
-        """Create a CAS experience. payload takes "name" and "description"; it only fills
-        the form unless you also pass "submit": true."""
+        """Create a CAS experience.
+
+        payload takes "name", "description" and "outcomes" (a list; see the note on
+        outcome names in action_add_reflection_journal). It only fills the form and
+        stops unless you also pass "submit": true -- the result's "saved" field says
+        which of the two happened.
+        """
         return _serialize(action_service.create_cas_experience(payload))
 
     @mcp.tool(name="read_cas_reflections", annotations=_RO)
@@ -348,9 +353,12 @@ def create_mcp_server():
         """Add a written journal reflection to a CAS experience.
 
         outcomes are IB learning outcomes, matched against the checkbox labels on
-        the form, so a fragment is enough ("Persevere", "new skills"). The result
-        reports which ones were ticked, which matched nothing, and what the
-        experience actually offers.
+        the form, so a fragment is enough. Careful: a reflection form spells them
+        out in full ("Persevere in action", "Undertake challenges that develop new
+        skills"), while the experience form uses the short names ("Perseverance",
+        "Challenge & New Skills") -- so the short name will not match here. Every
+        result reports which outcomes were ticked, which matched nothing, and the
+        full list the form offers, so an unmatched name can be retried exactly.
         """
         return _serialize(action_service.add_reflection_journal(experience_id=experience_id, text=text, outcomes=outcomes))
 

@@ -1087,3 +1087,66 @@ def test_a_reflection_kind_managebac_does_not_offer_is_refused():
     with pytest.raises(AppError) as exc:
         gw._open_reflection_form(page, 26692255, "interpretive_dance")
     assert "no 'interpretive_dance' reflection" in str(exc.value)
+
+
+class _ExperienceFormPage(_ReflectionFormPage):
+    """The new-experience form, where the outcomes carry their short names."""
+
+    OUTCOMES = {
+        "cas_activity_learning_outcome_ids_260849": "Awareness",
+        "cas_activity_learning_outcome_ids_260852": "Perseverance",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.filled: dict[str, str] = {}
+        self.clicked: list[str] = []
+
+    def locator(self, selector: str):
+        if "cas_activity[name]" in selector or "cas_activity[notes]" in selector or "input[type='submit']" in selector:
+            page = self
+
+            class _Field:
+                def count(self_inner):
+                    return 1
+
+                @property
+                def first(self_inner):
+                    return self_inner
+
+                def fill(self_inner, value):
+                    page.filled[selector] = value
+
+                def click(self_inner):
+                    page.clicked.append(selector)
+
+            return _Field()
+        return super().locator(selector)
+
+
+def test_filling_the_experience_form_is_not_reported_as_creating_one():
+    """payload without "submit" fills the form and stops; the caller must be
+    able to tell that from an experience that actually exists."""
+    gw = _gateway_with_artifacts("unused")
+    page = _ExperienceFormPage()
+    gw._with_authenticated_browser = lambda run: run(page)
+
+    filled = gw.create_cas_experience({"name": "Beach cleanup", "description": "Weekly"})
+    assert filled["saved"] is False
+    assert page.clicked == []
+
+    page = _ExperienceFormPage()
+    gw._with_authenticated_browser = lambda run: run(page)
+    saved = gw.create_cas_experience({"name": "Beach cleanup", "submit": True})
+    assert saved["saved"] is True
+    assert len(page.clicked) == 1
+
+
+def test_the_experience_form_is_opened_by_url_not_by_a_menu_item():
+    gw = _gateway_with_artifacts("unused")
+    page = _ExperienceFormPage()
+    gw._with_authenticated_browser = lambda run: run(page)
+
+    gw.create_cas_experience({"name": "Beach cleanup", "outcomes": ["Perseverance"]})
+
+    assert page.url.endswith("/student/ib/activity/cas/new")

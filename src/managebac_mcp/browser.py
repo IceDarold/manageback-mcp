@@ -612,25 +612,9 @@ class PlaywrightBrowserGateway:
         """
 
         def _run(page):
-            import pathlib as _pl
-            _d = _pl.Path("/var/lib/manageback-mcp/probe"); _d.mkdir(parents=True, exist_ok=True)
-            _got = []
-            for _name, _url in (
-                ("cas_index", self.config.route_url("cas_index")),
-                ("cas_new", self.config.build_url("/student/ib/activity/cas/new")),
-            ):
-                try:
-                    page.goto(_url, timeout=self.config.timeouts_ms.navigation)
-                    page.wait_for_timeout(2000)
-                    (_d / f"{_name}.html").write_text(page.content(), encoding="utf-8")
-                    _got.append(f"{_name}:{page.url}")
-                except Exception as exc:
-                    _got.append(f"{_name}:FAILED {exc!r}"[:160])
-
             page.goto(task_dropbox_url, timeout=self.config.timeouts_ms.navigation)
             body = page.inner_text("body")
             return {
-                "probe": _got,
                 "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
                 "upload_button_found": self._first_locator(page, self._selectors("dropbox_upload_button")) is not None,
                 "page_text": body[:700],
@@ -669,17 +653,33 @@ class PlaywrightBrowserGateway:
         return self._with_authenticated_browser(_run)
 
     def create_cas_experience(self, payload: dict) -> dict:
+        """Fill ManageBac's new-experience form, saving only if asked to.
+
+        Reached by its own URL for the same reason the reflection form is: the
+        "Add CAS Experience" label is a menu item, not a reliable target.
+        """
+
         def _run(page):
-            page.goto(self.config.route_url("cas_index"), timeout=self.config.timeouts_ms.navigation)
-            self._click_first(page, self._selectors("cas_add_experience"))
-            page.wait_for_timeout(800)
+            page.goto(self.config.route_url("cas_new"), timeout=self.config.timeouts_ms.navigation)
             if "name" in payload:
-                page.get_by_label("Experience Name").fill(payload["name"])
+                self._fill_first(page, self._selectors("cas_experience_name"), payload["name"])
             if "description" in payload:
-                page.get_by_label("Description and Goals").fill(payload["description"])
-            if payload.get("submit", False):
-                page.get_by_role("button", name=re.compile("Add|Save", re.I)).click()
-            return {"status": "ok", "screenshot": self._save_screenshot(page, "cas_create_experience"), "html": self._save_html(page, "cas_create_experience")}
+                self._fill_first(page, self._selectors("cas_experience_notes"), payload["description"])
+            outcomes = self._select_outcomes(page, payload.get("outcomes") or [])
+
+            saved = bool(payload.get("submit", False))
+            if saved:
+                self._click_first(page, self._selectors("cas_experience_submit"))
+                page.wait_for_timeout(2000)
+            return {
+                "status": "ok",
+                # A filled-in form that was never saved is not an experience, and
+                # the caller has to be able to tell the two apart.
+                "saved": saved,
+                **outcomes,
+                "screenshot": self._save_screenshot(page, "cas_create_experience"),
+                "html": self._save_html(page, "cas_create_experience"),
+            }
 
         return self._with_authenticated_browser(_run)
 

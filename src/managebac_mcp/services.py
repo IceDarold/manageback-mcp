@@ -708,7 +708,11 @@ class ActionService:
 
     def create_cas_experience(self, payload: dict) -> ToolResult:
         data = self.browser.create_cas_experience(payload)
-        return ToolResult(success=True, message="CAS experience action executed", data=data)
+        return ToolResult(
+            success=True,
+            message="CAS experience created" if data.get("saved") else "CAS experience form filled but not saved",
+            data=data,
+        )
 
     def add_reflection_journal(self, experience_id: int, text: str, outcomes: list[str]) -> ToolResult:
         with self.db.session() as session:

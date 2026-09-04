@@ -13,6 +13,7 @@ routes:
   task_page: "/student/classes/{class_id}/core_tasks/{task_id}"
   task_dropbox: "/student/classes/{class_id}/core_tasks/{task_id}/dropbox"
   cas_index: "/student/ib/activity/cas"
+  cas_new: "/student/ib/activity/cas/new"
   cas_experience: "/student/ib/activity/cas/{experience_id}"
   cas_reflections: "/student/ib/activity/cas/{experience_id}/reflections"
   cas_reflection_new: "/student/ib/activity/cas/{experience_id}/reflections/new"
@@ -47,9 +48,14 @@ selectors:
   dropbox_upload_button:
     - "form.edit_dropbox input[type='submit'][name='commit']"
     - "input[type='submit'][value='Upload Files']"
-  cas_add_experience:
-    - "a:has-text('Add CAS Experience')"
-    - "button:has-text('Add CAS Experience')"
+  # The new-experience form (form#new_cas_activity). Same shape as the
+  # reflection form: reached by URL, submitted by an input, not a button.
+  cas_experience_name:
+    - "form#new_cas_activity input[name='cas_activity[name]']"
+  cas_experience_notes:
+    - "form#new_cas_activity textarea[name='cas_activity[notes]']"
+  cas_experience_submit:
+    - "form#new_cas_activity input[type='submit'][name='commit']"
   # Every field below lives in ManageBac's single reflection form
   # (form#new_evidence); a type tile enables the ones its kind needs and leaves
   # the rest disabled. Names verified against a live form.
@@ -68,7 +74,7 @@ selectors:
   cas_reflection_photo_caption:
     - "form#new_evidence input[name='evidence[photos_attributes][0][caption]']"
   cas_outcome_checkbox:
-    - "form#new_evidence input[type='checkbox'][name='evidence[learning_outcome_ids][]']"
+    - "form#new_evidence input[type='checkbox'][name='evidence[learning_outcome_ids][]'], form#new_cas_activity input[type='checkbox'][name='cas_activity[learning_outcome_ids][]']"
   cas_reflection_submit:
     - "form#new_evidence input[type='submit'][name='commit']"
 

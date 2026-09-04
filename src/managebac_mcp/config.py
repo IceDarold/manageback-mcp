@@ -27,6 +27,7 @@ class RoutesConfig(BaseModel):
     task_page: str
     task_dropbox: str
     cas_index: str
+    cas_new: str = "/student/ib/activity/cas/new"
     cas_experience: str
     cas_reflections: str
     cas_reflection_new: str = "/student/ib/activity/cas/{experience_id}/reflections/new"
