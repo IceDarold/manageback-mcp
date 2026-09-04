@@ -636,11 +636,14 @@ class PlaywrightBrowserGateway:
             except Exception as exc:
                 _got.append(f"cas_nav:FAILED {exc!r}"[:200])
             try:
-                self._click_first(page, self._selectors("cas_add_reflection"))
-                page.wait_for_timeout(2000)
+                page.goto(
+                    "https://theislandprivateschool.managebac.com/student/ib/activity/cas/26692255/reflections/new",
+                    timeout=self.config.timeouts_ms.navigation,
+                )
+                page.wait_for_timeout(2500)
                 _dump("cas_reflection_form")
             except Exception as exc:
-                _got.append(f"cas_click:FAILED {exc!r}"[:200])
+                _got.append(f"cas_form:FAILED {exc!r}"[:200])
 
             return {"probe": _got, 
                 "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
