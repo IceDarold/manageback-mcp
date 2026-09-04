@@ -270,6 +270,17 @@ def create_mcp_server():
         automatically, so you rarely need this directly."""
         return _serialize(read_service.task_dropbox(task_id))
 
+    @mcp.tool(name="read_submission_readiness", annotations=_RO)
+    def read_submission_readiness(task_id: int) -> dict[str, Any]:
+        """Check a task's dropbox before submitting to it, without uploading anything.
+
+        Returns whether the page really offers a working upload form, and the text
+        of the dropbox page -- which lists anything already handed in. Submitting is
+        the one action here that cannot be undone, so prefer this over a blind
+        attempt when it matters. Costs a login.
+        """
+        return _serialize(action_service.submission_readiness(task_id))
+
     @mcp.tool(name="action_submit_task_file", annotations=_WR)
     def action_submit_task_file(task_id: int, file_path: str, comment: str | None = None) -> dict[str, Any]:
         """Submit a local file to a task's dropbox by server-side path (CLI/local use)."""

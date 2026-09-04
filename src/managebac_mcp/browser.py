@@ -62,6 +62,8 @@ class BrowserGateway(Protocol):
 
     def collect_startup_data(self) -> "StartupData": ...
 
+    def inspect_dropbox(self, task_dropbox_url: str) -> dict: ...
+
     def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome: ...
 
     def create_cas_experience(self, payload: dict) -> dict: ...
@@ -598,6 +600,25 @@ class PlaywrightBrowserGateway:
 
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]:
         return self._with_authenticated_browser(self._scrape_cas)
+
+    def inspect_dropbox(self, task_dropbox_url: str) -> dict:
+        """Open a dropbox and look, without uploading anything.
+
+        Submitting is the one action here that cannot be taken back, so it is
+        worth being able to check first that the page is the one we expect and
+        that nothing has been handed in yet.
+        """
+
+        def _run(page):
+            page.goto(task_dropbox_url, timeout=self.config.timeouts_ms.navigation)
+            body = page.inner_text("body")
+            return {
+                "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
+                "upload_button_found": self._first_locator(page, self._selectors("dropbox_upload_button")) is not None,
+                "page_text": body[:700],
+            }
+
+        return self._with_authenticated_browser(_run)
 
     def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome:
         if not file_path.exists():

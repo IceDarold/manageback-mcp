@@ -8,7 +8,7 @@ from pathlib import Path
 from .browser import BrowserGateway
 from .clock import DEFAULT_TIMEZONE, school_now
 from .db import Database
-from .errors import AppError, CAS_EXPERIENCE_NOT_FOUND, CLASS_NOT_FOUND, INVALID_INPUT, TASK_NOT_FOUND
+from .errors import AppError, CAS_EXPERIENCE_NOT_FOUND, CLASS_NOT_FOUND, DROPBOX_NOT_AVAILABLE, INVALID_INPUT, TASK_NOT_FOUND
 from .repositories import CasRepository, ClassRepository, LessonRepository, SnapshotRepository, SubmissionRepository, SyncRunRepository, TaskRepository
 from .types import ToolArtifacts, ToolResult
 
@@ -651,6 +651,31 @@ class ActionService:
 
     def retry_submission(self, task_id: int, file_path: str) -> ToolResult:
         return self.submit_task_file(task_id=task_id, file_path=file_path)
+
+    def submission_readiness(self, task_id: int) -> ToolResult:
+        """Look at a task's dropbox before submitting to it."""
+        with self.db.session() as session:
+            task = TaskRepository(session).get(task_id)
+            if task is None:
+                return ToolResult(success=False, message=f"Task {task_id} not found", error_code=TASK_NOT_FOUND)
+            url, title = task.dropbox_url, task.title
+        if not url:
+            return ToolResult(
+                success=False,
+                message=f"Task '{title}' has no dropbox to submit to",
+                error_code=DROPBOX_NOT_AVAILABLE,
+            )
+        found = self.browser.inspect_dropbox(url)
+        ready = found["file_input_found"] and found["upload_button_found"]
+        return ToolResult(
+            success=True,
+            message=(
+                f"'{title}' accepts a file"
+                if ready
+                else f"'{title}' does not show a working upload form -- do not submit blind"
+            ),
+            data={"task_id": task_id, "title": title, "ready": ready, "dropbox_url": url, **found},
+        )
 
     def task_details_live(self, task_id: int) -> ToolResult:
         """Open the task's own page and read what the student actually has to do."""

@@ -893,3 +893,39 @@ def test_service_does_not_report_an_unverified_upload_as_submitted(tmp_path: Pat
 
     assert result.data["status"] == "unverified"
     assert "did not list the file back" in result.message
+
+
+def test_submission_readiness_reports_a_usable_dropbox(tmp_path: Path):
+    db = build_db()
+
+    class Inspecting(FakeBrowser):
+        def __init__(self):
+            self.seen: list[str] = []
+
+        def inspect_dropbox(self, task_dropbox_url: str) -> dict:
+            self.seen.append(task_dropbox_url)
+            return {"file_input_found": True, "upload_button_found": True, "page_text": "No files yet"}
+
+    browser = Inspecting()
+    SyncService(db, browser).run_startup_sync()
+
+    result = ActionService(db, browser).submission_readiness(47417931 + 12816550)
+
+    assert result.success and result.data["ready"] is True
+    assert browser.seen == [result.data["dropbox_url"]]
+
+
+def test_submission_readiness_refuses_to_call_a_broken_form_ready():
+    db = build_db()
+
+    class NoForm(FakeBrowser):
+        def inspect_dropbox(self, task_dropbox_url: str) -> dict:
+            return {"file_input_found": False, "upload_button_found": False, "page_text": "Submissions are closed"}
+
+    browser = NoForm()
+    SyncService(db, browser).run_startup_sync()
+
+    result = ActionService(db, browser).submission_readiness(47417931 + 12816550)
+
+    assert result.data["ready"] is False
+    assert "do not submit blind" in result.message
