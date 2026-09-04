@@ -559,9 +559,17 @@ class ActionService:
             repo = ClassRepository(session)
             if repo.get(class_id) is None:
                 return ToolResult(success=False, message=f"Class {class_id} not found", error_code=CLASS_NOT_FOUND)
-            tasks = self.browser.fetch_tasks(class_id)
+            # The crawl walks every view for every class anyway, so storing only
+            # the requested one threw away work already paid for -- and left the
+            # other classes on stale data.
+            tasks = self.browser.fetch_all_tasks()
             count = TaskRepository(session).upsert_many(tasks)
-            return ToolResult(success=True, message=f"Refreshed {count} tasks", data={"tasks": count, "class_id": class_id})
+            mine = sum(1 for t in tasks if t.class_id == class_id)
+            return ToolResult(
+                success=True,
+                message=f"Refreshed {mine} task(s) for this class, {count} in total",
+                data={"tasks": mine, "tasks_total": count, "class_id": class_id},
+            )
 
     def submit_task_file(self, task_id: int, file_path: str, comment: str | None = None) -> ToolResult:
         p = Path(file_path)

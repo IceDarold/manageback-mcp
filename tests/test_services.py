@@ -34,6 +34,12 @@ class FakeBrowser:
             )
         ]
 
+    def fetch_all_tasks(self):
+        out = []
+        for cls in self.fetch_classes():
+            out.extend(self.fetch_tasks(cls.class_id))
+        return out
+
     def fetch_deadlines(self, views=None, max_pages=None):
         out = []
         for cls in self.fetch_classes():
@@ -694,3 +700,27 @@ def test_scrape_deadlines_passes_the_direction_of_its_view():
     gw._scrape_deadlines(FakePage(), "past")
     gw._scrape_deadlines(FakePage(), "upcoming")
     assert seen == ["past", "future"]
+
+
+def test_class_refresh_stores_every_class_it_crawled():
+    """One crawl covers all classes, so none of it should be discarded."""
+    from managebac_mcp.repositories import TaskRepository
+
+    db = build_db()
+    browser = FakeBrowser()
+    SyncService(db, browser).run_startup_sync()
+
+    with db.session() as session:
+        TaskRepository(session).upsert_many([
+            TaskRecord(task_id=47417931 + 12816551, class_id=12816551, title="stale",
+                       due_at=None, status=None, url="old", dropbox_url="old", raw_hash="old")
+        ])
+
+    res = ActionService(db, browser).refresh_class_tasks(12816550)
+    assert res.success
+    assert res.data["tasks"] == 1        # the class asked for
+    assert res.data["tasks_total"] == 2  # both classes written
+
+    with db.session() as session:
+        other = TaskRepository(session).get(47417931 + 12816551)
+        assert other.title == "Task for 12816551"  # refreshed, not left stale

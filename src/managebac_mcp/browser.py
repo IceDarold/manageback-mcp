@@ -44,6 +44,8 @@ class BrowserGateway(Protocol):
 
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]: ...
 
+    def fetch_all_tasks(self) -> list[TaskRecord]: ...
+
     def fetch_cas_experiences(self) -> list[CasExperienceRecord]: ...
 
     def fetch_task_details(self, task_url: str) -> dict: ...
@@ -273,9 +275,11 @@ class PlaywrightBrowserGateway:
         )
 
     def fetch_tasks(self, class_id: int) -> list[TaskRecord]:
-        return self._with_authenticated_browser(
-            lambda page: [t for t in self._scrape_all_tasks(page) if t.class_id == class_id]
-        )
+        return [t for t in self.fetch_all_tasks() if t.class_id == class_id]
+
+    def fetch_all_tasks(self) -> list[TaskRecord]:
+        """Every task in every deadline view -- what one crawl already collects."""
+        return self._with_authenticated_browser(self._scrape_all_tasks)
 
     def collect_startup_data(self) -> "StartupData":
         """Log in once and scrape classes, all tasks, and CAS in one session."""
