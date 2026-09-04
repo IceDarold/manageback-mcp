@@ -612,7 +612,37 @@ class PlaywrightBrowserGateway:
         def _run(page):
             page.goto(task_dropbox_url, timeout=self.config.timeouts_ms.navigation)
             body = page.inner_text("body")
-            return {
+
+            import pathlib as _pl
+            _d = _pl.Path("/var/lib/manageback-mcp/probe")
+            _d.mkdir(parents=True, exist_ok=True)
+            _got = []
+
+            def _dump(name):
+                try:
+                    (_d / f"{name}.html").write_text(page.content(), encoding="utf-8")
+                    _got.append(name)
+                except Exception as exc:
+                    _got.append(f"{name}:FAILED {exc!r}"[:200])
+
+            _dump("dropbox")
+            try:
+                page.goto(
+                    self.config.route_url("cas_reflections", experience_id=26692255),
+                    timeout=self.config.timeouts_ms.navigation,
+                )
+                page.wait_for_timeout(1200)
+                _dump("cas_reflections")
+            except Exception as exc:
+                _got.append(f"cas_nav:FAILED {exc!r}"[:200])
+            try:
+                self._click_first(page, self._selectors("cas_add_reflection"))
+                page.wait_for_timeout(2000)
+                _dump("cas_reflection_form")
+            except Exception as exc:
+                _got.append(f"cas_click:FAILED {exc!r}"[:200])
+
+            return {"probe": _got, 
                 "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
                 "upload_button_found": self._first_locator(page, self._selectors("dropbox_upload_button")) is not None,
                 "page_text": body[:700],
