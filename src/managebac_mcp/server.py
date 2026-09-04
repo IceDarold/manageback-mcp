@@ -37,7 +37,7 @@ def create_services() -> tuple[Settings, Database, SyncService, ReadService, Act
     db = Database(settings.sqlalchemy_url)
     db.create_all()
 
-    browser = PlaywrightBrowserGateway(cfg)
+    browser = PlaywrightBrowserGateway(cfg, settings.artifacts_dir)
     sync_service = SyncService(db, browser, cfg.timezone)
     read_service = ReadService(db, cfg.timezone)
     action_service = ActionService(db, browser, cfg.timezone)

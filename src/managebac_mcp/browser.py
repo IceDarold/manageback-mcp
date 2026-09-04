@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date as date_cls, datetime, timedelta
@@ -21,6 +22,8 @@ from .errors import (
     UPLOAD_FAILED,
 )
 from .types import CasExperienceRecord, ClassRecord, LessonRecord, TaskRecord
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -610,10 +613,19 @@ class PlaywrightBrowserGateway:
             self._click_first(page, self._selectors("dropbox_upload_button"))
             page.wait_for_timeout(2000)
 
-            status_text = page.inner_text("body")[:700]
-            screenshot = self._save_screenshot(page, "task_upload")
-            html = self._save_html(page, "task_upload")
-            return UploadOutcome(status="submitted", message=status_text, screenshot_path=screenshot, html_path=html)
+            body = page.inner_text("body")
+            # ManageBac lists the dropbox's files by name once it has accepted
+            # one, so seeing our filename back is the only positive evidence
+            # available here. Without it we say "unverified" rather than
+            # "submitted": the file may well be up, and a caller who retries a
+            # silent success submits it twice.
+            status = "submitted" if file_path.name in body else "unverified"
+            return UploadOutcome(
+                status=status,
+                message=body[:700],
+                screenshot_path=self._save_screenshot(page, "task_upload"),
+                html_path=self._save_html(page, "task_upload"),
+            )
 
         return self._with_authenticated_browser(_run)
 
@@ -746,17 +758,41 @@ class PlaywrightBrowserGateway:
             raise AppError(UNKNOWN_UI_CHANGE, f"No selector matched for click: {selectors}")
         locator.click()
 
-    def _save_screenshot(self, page, prefix: str) -> str:
-        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        path = self.artifacts_dir / f"{prefix}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.png"
-        page.screenshot(path=str(path), full_page=True)
-        return str(path)
+    def _artifact_path(self, prefix: str, suffix: str) -> Path:
+        stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        return self.artifacts_dir / f"{prefix}-{stamp}.{suffix}"
 
-    def _save_html(self, page, prefix: str) -> str:
-        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        path = self.artifacts_dir / f"{prefix}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.html"
-        path.write_text(page.content(), encoding="utf-8")
-        return str(path)
+    def _save_screenshot(self, page, prefix: str) -> str | None:
+        """Keep a picture of what the write action left on screen.
+
+        Evidence, never a gate: the write itself has already happened by the
+        time we get here, so a filesystem that refuses us (a read-only sandbox,
+        a full disk) must not turn a completed submission into a reported
+        failure -- that invites the caller to submit a second time.
+        """
+        if not self.config.features.save_artifacts_on_success:
+            return None
+        try:
+            self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+            path = self._artifact_path(prefix, "png")
+            page.screenshot(path=str(path), full_page=True)
+            return str(path)
+        except Exception:
+            logger.warning("could not save screenshot %s under %s", prefix, self.artifacts_dir, exc_info=True)
+            return None
+
+    def _save_html(self, page, prefix: str) -> str | None:
+        """The page's HTML alongside the screenshot. Best-effort, as above."""
+        if not self.config.features.save_artifacts_on_success:
+            return None
+        try:
+            self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+            path = self._artifact_path(prefix, "html")
+            path.write_text(page.content(), encoding="utf-8")
+            return str(path)
+        except Exception:
+            logger.warning("could not save html %s under %s", prefix, self.artifacts_dir, exc_info=True)
+            return None
 
     def _select_outcomes(self, page, outcomes: list[str]) -> None:
         body = page.inner_text("body")

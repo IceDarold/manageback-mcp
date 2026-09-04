@@ -51,4 +51,4 @@ selectors:
 
 features:
   startup_sync: false
-  save_artifacts_on_success: false
+  save_artifacts_on_success: true

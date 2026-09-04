@@ -773,3 +773,123 @@ def test_school_clock_is_used_not_the_server_clock():
 
     # An unusable zone must degrade rather than take the connector down.
     assert abs(school_now("Not/AZone") - nicosia) < timedelta(seconds=5)
+
+
+def _gateway_with_artifacts(artifacts_dir, *, save_on_success=True):
+    import pathlib
+
+    from managebac_mcp.browser import PlaywrightBrowserGateway
+    from managebac_mcp.config import load_managebac_config
+
+    config = load_managebac_config(pathlib.Path("config/managebac.yaml"))
+    config.features.save_artifacts_on_success = save_on_success
+    return PlaywrightBrowserGateway(config, pathlib.Path(artifacts_dir))
+
+
+class _UploadPage:
+    """The dropbox page as it behaves after a file has gone up."""
+
+    def __init__(self, body: str):
+        self.body = body
+        self.uploaded: list[str] = []
+
+    def goto(self, url, timeout=None):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def inner_text(self, selector):
+        return self.body
+
+    def screenshot(self, path=None, full_page=False):
+        Path(path).write_bytes(b"png")
+
+    def content(self):
+        return "<html></html>"
+
+
+def test_a_read_only_artifacts_dir_does_not_fail_a_finished_write(tmp_path):
+    """The deployed unit's working directory is read-only under ProtectSystem=strict.
+
+    Evidence-saving must not turn an upload that already reached ManageBac into
+    a reported failure -- that is the one direction a caller cannot recover
+    from, because retrying submits the same work twice.
+    """
+    # The suite runs as root, which walks through mode bits, so the refusal is
+    # forced by giving the directory an ordinary file as its parent. What is
+    # under test is that any OSError from mkdir or write stays contained.
+    blocked = tmp_path / "not-a-dir" / "artifacts"
+    blocked.parent.write_text("i am a file", encoding="utf-8")
+
+    gw = _gateway_with_artifacts(blocked)
+    page = _UploadPage("Homework.pdf uploaded")
+
+    assert gw._save_screenshot(page, "task_upload") is None
+    assert gw._save_html(page, "task_upload") is None
+
+
+def test_artifacts_are_written_where_they_are_configured(tmp_path):
+    gw = _gateway_with_artifacts(tmp_path / "arts")
+    page = _UploadPage("body")
+
+    shot = gw._save_screenshot(page, "task_upload")
+    html = gw._save_html(page, "task_upload")
+
+    assert shot is not None and Path(shot).parent == tmp_path / "arts"
+    assert html is not None and Path(html).read_text() == "<html></html>"
+
+
+def test_save_artifacts_on_success_is_honoured(tmp_path):
+    """The flag was declared in config from the start; it must actually gate."""
+    gw = _gateway_with_artifacts(tmp_path / "arts", save_on_success=False)
+    page = _UploadPage("body")
+
+    assert gw._save_screenshot(page, "task_upload") is None
+    assert gw._save_html(page, "task_upload") is None
+    assert not (tmp_path / "arts").exists()
+
+
+def test_upload_is_called_submitted_only_when_managebac_lists_the_file(tmp_path):
+    upload = tmp_path / "Homework.pdf"
+    upload.write_text("work")
+
+    def outcome_for(body: str):
+        gw = _gateway_with_artifacts(tmp_path / "arts")
+        page = _UploadPage(body)
+        gw._first_locator = lambda p, sel: _StubLocator()
+        gw._click_first = lambda p, sel: None
+        gw._with_authenticated_browser = lambda run: run(page)
+        return gw.submit_task_file("https://example.test/dropbox", upload)
+
+    assert outcome_for("Files: Homework.pdf").status == "submitted"
+    assert outcome_for("Add files to this dropbox").status == "unverified"
+
+
+class _StubLocator:
+    def set_input_files(self, path):
+        pass
+
+    def click(self):
+        pass
+
+
+def test_service_does_not_report_an_unverified_upload_as_submitted(tmp_path: Path):
+    db = build_db()
+
+    class Unverified(FakeBrowser):
+        def submit_task_file(self, task_dropbox_url, file_path, comment=None):
+            return UploadOutcome(status="unverified", message="Add files to this dropbox")
+
+    browser = Unverified()
+    SyncService(db, browser).run_startup_sync()
+
+    file_path = tmp_path / "essay.txt"
+    file_path.write_text("done", encoding="utf-8")
+
+    result = ActionService(db, browser).submit_task_file(
+        task_id=47417931 + 12816550, file_path=str(file_path)
+    )
+
+    assert result.data["status"] == "unverified"
+    assert "did not list the file back" in result.message

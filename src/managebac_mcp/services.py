@@ -599,9 +599,18 @@ class ActionService:
                 html_path=outcome.html_path,
                 screenshot_path=outcome.screenshot_path,
             )
+            # "unverified" means the upload ran but ManageBac did not show the
+            # file back. Say so instead of reporting a clean success, and do not
+            # invite a retry that would submit the same work twice.
+            submitted = outcome.status == "submitted"
+            message = (
+                "File submitted"
+                if submitted
+                else "Upload ran but ManageBac did not list the file back -- check the dropbox before retrying"
+            )
             return ToolResult(
                 success=True,
-                message="File submitted",
+                message=message,
                 data={"task_id": task_id, "status": outcome.status, "status_message": outcome.message},
                 artifacts=ToolArtifacts(screenshot=outcome.screenshot_path, html=outcome.html_path),
             )

@@ -75,6 +75,10 @@ class Settings(BaseSettings):
 
     database_url: str | None = None
     managebac_config_path: Path = Path("config/managebac.yaml")
+    # Screenshots and page dumps from write actions. The deployed unit runs
+    # under ProtectSystem=strict, where the working directory is read-only, so
+    # this has to point at the same writable state directory as the database.
+    artifacts_dir: Path = Path("artifacts")
     mysql_host: str = "127.0.0.1"
     mysql_port: int = 3306
     mysql_db: str = "managebac_mcp"
