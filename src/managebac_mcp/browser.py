@@ -64,13 +64,15 @@ class BrowserGateway(Protocol):
 
     def inspect_dropbox(self, task_dropbox_url: str) -> dict: ...
 
-    def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome: ...
+    def submit_task_file(self, task_dropbox_url: str, file_path: Path) -> UploadOutcome: ...
 
     def create_cas_experience(self, payload: dict) -> dict: ...
 
     def add_cas_reflection_journal(self, experience_id: int, text: str, outcomes: list[str]) -> dict: ...
 
     def add_cas_reflection_file(self, experience_id: int, file_path: Path, outcomes: list[str]) -> dict: ...
+
+    def add_cas_reflection_photo(self, experience_id: int, file_path: Path, caption: str | None, outcomes: list[str]) -> dict: ...
 
     def add_cas_reflection_link(self, experience_id: int, reflection_type: str, url: str, outcomes: list[str]) -> dict: ...
 
@@ -612,40 +614,7 @@ class PlaywrightBrowserGateway:
         def _run(page):
             page.goto(task_dropbox_url, timeout=self.config.timeouts_ms.navigation)
             body = page.inner_text("body")
-
-            import pathlib as _pl
-            _d = _pl.Path("/var/lib/manageback-mcp/probe")
-            _d.mkdir(parents=True, exist_ok=True)
-            _got = []
-
-            def _dump(name):
-                try:
-                    (_d / f"{name}.html").write_text(page.content(), encoding="utf-8")
-                    _got.append(name)
-                except Exception as exc:
-                    _got.append(f"{name}:FAILED {exc!r}"[:200])
-
-            _dump("dropbox")
-            try:
-                page.goto(
-                    self.config.route_url("cas_reflections", experience_id=26692255),
-                    timeout=self.config.timeouts_ms.navigation,
-                )
-                page.wait_for_timeout(1200)
-                _dump("cas_reflections")
-            except Exception as exc:
-                _got.append(f"cas_nav:FAILED {exc!r}"[:200])
-            try:
-                page.goto(
-                    "https://theislandprivateschool.managebac.com/student/ib/activity/cas/26692255/reflections/new",
-                    timeout=self.config.timeouts_ms.navigation,
-                )
-                page.wait_for_timeout(2500)
-                _dump("cas_reflection_form")
-            except Exception as exc:
-                _got.append(f"cas_form:FAILED {exc!r}"[:200])
-
-            return {"probe": _got, 
+            return {
                 "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
                 "upload_button_found": self._first_locator(page, self._selectors("dropbox_upload_button")) is not None,
                 "page_text": body[:700],
@@ -653,7 +622,7 @@ class PlaywrightBrowserGateway:
 
         return self._with_authenticated_browser(_run)
 
-    def submit_task_file(self, task_dropbox_url: str, file_path: Path, comment: str | None = None) -> UploadOutcome:
+    def submit_task_file(self, task_dropbox_url: str, file_path: Path) -> UploadOutcome:
         if not file_path.exists():
             raise AppError(FILE_NOT_FOUND, f"File does not exist: {file_path}")
 
@@ -698,15 +667,68 @@ class PlaywrightBrowserGateway:
 
         return self._with_authenticated_browser(_run)
 
+    # ManageBac's reflection form (form#new_evidence) is one form for all five
+    # kinds of evidence. A tile switches the hidden `type` field and enables the
+    # fields that kind needs; everything else stays disabled. So every reflection
+    # follows the same three steps: open the form, pick the tile, fill the one
+    # input that tile turned on.
+    _REFLECTION_MODELS = {
+        "journal": "JournalEvidence",
+        "file": "FileEvidence",
+        "video": "YoutubeEvidence",
+        "website": "WebsiteEvidence",
+        "photos": "AlbumEvidence",
+    }
+
+    def _open_reflection_form(self, page, experience_id: int, reflection_type: str) -> None:
+        """Land on a blank reflection form with the right kind selected.
+
+        Deliberately navigates instead of clicking "Add Reflections & Evidence":
+        that label exists twice on the experience page, and the first match is a
+        collapsed dropdown item, so clicking it waits for an element that never
+        becomes visible.
+        """
+        page.goto(
+            self.config.route_url("cas_reflection_new", experience_id=experience_id),
+            timeout=self.config.timeouts_ms.navigation,
+        )
+        tile = page.locator(f"a.f-tile--link[data-type='{reflection_type}']")
+        if tile.count() == 0:
+            raise AppError(
+                CAS_REFLECTION_FAILED,
+                f"ManageBac offers no '{reflection_type}' reflection here (expected one of {sorted(self._REFLECTION_MODELS)})",
+            )
+        tile.first.click()
+        page.wait_for_timeout(500)
+
+        selected = page.locator("input#evidence_type").first.get_attribute("value")
+        expected = self._REFLECTION_MODELS[reflection_type]
+        if selected != expected:
+            raise AppError(
+                CAS_REFLECTION_FAILED,
+                f"Picking '{reflection_type}' left the form on {selected!r}, expected {expected!r}",
+            )
+
+    def _submit_reflection(self, page, experience_id: int, reflection_type: str, outcomes: list[str]) -> dict:
+        """Attach the learning outcomes, save, and report what actually happened."""
+        chosen = self._select_outcomes(page, outcomes)
+        self._click_first(page, self._selectors("cas_reflection_submit"))
+        page.wait_for_timeout(2000)
+        return {
+            "status": "ok",
+            "reflection_type": reflection_type,
+            **chosen,
+            "screenshot": self._save_screenshot(page, f"cas_reflection_{reflection_type}"),
+            "html": self._save_html(page, f"cas_reflection_{reflection_type}"),
+        }
+
     def add_cas_reflection_journal(self, experience_id: int, text: str, outcomes: list[str]) -> dict:
         def _run(page):
-            page.goto(self.config.route_url("cas_reflections", experience_id=experience_id), timeout=self.config.timeouts_ms.navigation)
-            self._click_first(page, self._selectors("cas_add_reflection"))
-            page.get_by_text("Journal", exact=False).first.click()
-            page.locator("[contenteditable='true']").first.fill(text)
-            self._select_outcomes(page, outcomes)
-            page.get_by_role("button", name=re.compile("Add Entry|Save", re.I)).click()
-            return {"status": "ok", "screenshot": self._save_screenshot(page, "cas_reflection_journal"), "html": self._save_html(page, "cas_reflection_journal")}
+            self._open_reflection_form(page, experience_id, "journal")
+            # The visible editor is a rich-text widget over a hidden textarea,
+            # and it is the editor that syncs into the textarea on submit.
+            self._fill_first(page, self._selectors("cas_reflection_body"), text)
+            return self._submit_reflection(page, experience_id, "journal", outcomes)
 
         return self._with_authenticated_browser(_run)
 
@@ -715,32 +737,35 @@ class PlaywrightBrowserGateway:
             raise AppError(FILE_NOT_FOUND, f"File does not exist: {file_path}")
 
         def _run(page):
-            page.goto(self.config.route_url("cas_reflections", experience_id=experience_id), timeout=self.config.timeouts_ms.navigation)
-            self._click_first(page, self._selectors("cas_add_reflection"))
-            page.get_by_text("File", exact=False).first.click()
-            page.locator("input[type='file']").first.set_input_files(str(file_path))
-            self._select_outcomes(page, outcomes)
-            page.get_by_role("button", name=re.compile("Add Entry|Save", re.I)).click()
-            return {"status": "ok", "screenshot": self._save_screenshot(page, "cas_reflection_file"), "html": self._save_html(page, "cas_reflection_file")}
+            self._open_reflection_form(page, experience_id, "file")
+            self._first_required(page, self._selectors("cas_reflection_file")).set_input_files(str(file_path))
+            return self._submit_reflection(page, experience_id, "file", outcomes)
+
+        return self._with_authenticated_browser(_run)
+
+    def add_cas_reflection_photo(self, experience_id: int, file_path: Path, caption: str | None, outcomes: list[str]) -> dict:
+        if not file_path.exists():
+            raise AppError(FILE_NOT_FOUND, f"File does not exist: {file_path}")
+
+        def _run(page):
+            self._open_reflection_form(page, experience_id, "photos")
+            self._first_required(page, self._selectors("cas_reflection_photo")).set_input_files(str(file_path))
+            if caption:
+                self._fill_first(page, self._selectors("cas_reflection_photo_caption"), caption)
+            return self._submit_reflection(page, experience_id, "photos", outcomes)
 
         return self._with_authenticated_browser(_run)
 
     def add_cas_reflection_link(self, experience_id: int, reflection_type: str, url: str, outcomes: list[str]) -> dict:
-        if reflection_type not in {"video", "website", "photos"}:
-            raise AppError(CAS_REFLECTION_FAILED, "reflection_type must be video|website|photos")
+        # Photos are files with captions on this form, not a link, so they have
+        # their own method rather than a url this form has nowhere to put.
+        if reflection_type not in {"video", "website"}:
+            raise AppError(CAS_REFLECTION_FAILED, "reflection_type must be video|website")
 
         def _run(page):
-            page.goto(self.config.route_url("cas_reflections", experience_id=experience_id), timeout=self.config.timeouts_ms.navigation)
-            self._click_first(page, self._selectors("cas_add_reflection"))
-            page.get_by_text(reflection_type.capitalize(), exact=False).first.click()
-            page.locator("input[type='url'], input[placeholder*='http']").first.fill(url)
-            self._select_outcomes(page, outcomes)
-            page.get_by_role("button", name=re.compile("Add Entry|Save", re.I)).click()
-            return {
-                "status": "ok",
-                "screenshot": self._save_screenshot(page, f"cas_reflection_{reflection_type}"),
-                "html": self._save_html(page, f"cas_reflection_{reflection_type}"),
-            }
+            self._open_reflection_form(page, experience_id, reflection_type)
+            self._fill_first(page, self._selectors("cas_reflection_url"), url)
+            return self._submit_reflection(page, experience_id, reflection_type, outcomes)
 
         return self._with_authenticated_browser(_run)
 
@@ -848,11 +873,49 @@ class PlaywrightBrowserGateway:
             logger.warning("could not save html %s under %s", prefix, self.artifacts_dir, exc_info=True)
             return None
 
-    def _select_outcomes(self, page, outcomes: list[str]) -> None:
-        body = page.inner_text("body")
-        for outcome in outcomes:
-            if outcome in body:
-                page.get_by_text(outcome, exact=False).first.click()
+    def _first_required(self, page, selectors: list[str]):
+        locator = self._first_locator(page, selectors)
+        if locator is None:
+            raise AppError(UNKNOWN_UI_CHANGE, f"No selector matched: {selectors}")
+        return locator
+
+    def _select_outcomes(self, page, outcomes: list[str]) -> dict:
+        """Tick the learning outcomes the caller named, and say which took.
+
+        The outcomes are real checkboxes whose labels are full IB sentences
+        ("Undertake challenges that develop new skills"), so a caller will pass
+        a fragment. Match against those labels rather than clicking the first
+        element on the page that happens to contain the words -- and report the
+        ones that matched nothing instead of silently dropping them.
+        """
+        boxes = page.locator(",".join(self._selectors("cas_outcome_checkbox")))
+        available: list[tuple[str, object]] = []
+        for i in range(boxes.count()):
+            box = boxes.nth(i)
+            box_id = box.get_attribute("id") or ""
+            label = page.locator(f"label[for='{box_id}']") if box_id else None
+            text = label.first.inner_text().strip() if label and label.count() else ""
+            available.append((text, box))
+
+        selected: list[str] = []
+        unmatched: list[str] = []
+        for wanted in outcomes:
+            needle = wanted.strip().casefold()
+            hit = next((t for t, _ in available if needle and needle in t.casefold()), None)
+            if hit is None:
+                unmatched.append(wanted)
+                continue
+            box = next(b for t, b in available if t == hit)
+            if not box.is_checked():
+                box.check()
+            if hit not in selected:
+                selected.append(hit)
+
+        return {
+            "outcomes_selected": selected,
+            "outcomes_unmatched": unmatched,
+            "outcomes_available": [t for t, _ in available],
+        }
 
 
 def dedupe_classes(records: list[ClassRecord]) -> list[ClassRecord]:

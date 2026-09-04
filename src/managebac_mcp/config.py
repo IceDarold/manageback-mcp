@@ -29,6 +29,7 @@ class RoutesConfig(BaseModel):
     cas_index: str
     cas_experience: str
     cas_reflections: str
+    cas_reflection_new: str = "/student/ib/activity/cas/{experience_id}/reflections/new"
     tasks_and_deadlines: str = "/student/tasks_and_deadlines"
     timetable_weekly: str = "/student/timetables/weekly"
 

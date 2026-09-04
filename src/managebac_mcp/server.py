@@ -282,12 +282,12 @@ def create_mcp_server():
         return _serialize(action_service.submission_readiness(task_id))
 
     @mcp.tool(name="action_submit_task_file", annotations=_WR)
-    def action_submit_task_file(task_id: int, file_path: str, comment: str | None = None) -> dict[str, Any]:
+    def action_submit_task_file(task_id: int, file_path: str) -> dict[str, Any]:
         """Submit a local file to a task's dropbox by server-side path (CLI/local use)."""
-        return _serialize(action_service.submit_task_file(task_id=task_id, file_path=file_path, comment=comment))
+        return _serialize(action_service.submit_task_file(task_id=task_id, file_path=file_path))
 
     @mcp.tool(name="action_submit_task_content", annotations=_WR)
-    def action_submit_task_content(task_id: int, file_name: str, content_base64: str, comment: str | None = None) -> dict[str, Any]:
+    def action_submit_task_content(task_id: int, file_name: str, content_base64: str) -> dict[str, Any]:
         """Submit a file to a task's dropbox from inline base64 content.
 
         Use this from a remote agent that cannot place a file on the server: pass the
@@ -296,7 +296,7 @@ def create_mcp_server():
         deletes it. Prefer this over action_submit_task_file when you only have the content.
         """
         return _serialize(
-            action_service.submit_task_content(task_id=task_id, file_name=file_name, content_base64=content_base64, comment=comment)
+            action_service.submit_task_content(task_id=task_id, file_name=file_name, content_base64=content_base64)
         )
 
     @mcp.tool(name="read_submission_result", annotations=_RO)
@@ -347,7 +347,10 @@ def create_mcp_server():
     def action_add_reflection_journal(experience_id: int, text: str, outcomes: list[str]) -> dict[str, Any]:
         """Add a written journal reflection to a CAS experience.
 
-        outcomes are IB learning outcome names, e.g. ["Awareness", "Collaboration"].
+        outcomes are IB learning outcomes, matched against the checkbox labels on
+        the form, so a fragment is enough ("Persevere", "new skills"). The result
+        reports which ones were ticked, which matched nothing, and what the
+        experience actually offers.
         """
         return _serialize(action_service.add_reflection_journal(experience_id=experience_id, text=text, outcomes=outcomes))
 
@@ -371,10 +374,16 @@ def create_mcp_server():
         )
 
     @mcp.tool(name="action_add_reflection_photos", annotations=_WR)
-    def action_add_reflection_photos(experience_id: int, photos_url: str, outcomes: list[str]) -> dict[str, Any]:
-        """Attach a photo-album URL as evidence to a CAS experience."""
+    def action_add_reflection_photos(experience_id: int, file_path: str, caption: str | None = None, outcomes: list[str] | None = None) -> dict[str, Any]:
+        """Attach a photo as evidence to a CAS experience (server-side path).
+
+        ManageBac's photo evidence is an uploaded image with an optional caption,
+        not a link to an album.
+        """
         return _serialize(
-            action_service.add_reflection_link(experience_id=experience_id, reflection_type="photos", url=photos_url, outcomes=outcomes)
+            action_service.add_reflection_photo(
+                experience_id=experience_id, file_path=file_path, caption=caption, outcomes=outcomes or []
+            )
         )
 
     return mcp

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from managebac_mcp.browser import UploadOutcome
 from managebac_mcp.db import Database
 from managebac_mcp.services import ActionService, ReadService, SyncService
@@ -929,3 +931,159 @@ def test_submission_readiness_refuses_to_call_a_broken_form_ready():
 
     assert result.data["ready"] is False
     assert "do not submit blind" in result.message
+
+
+class _Checkbox:
+    def __init__(self, box_id: str, checked: bool = False):
+        self.id = box_id
+        self.checked = checked
+
+    def get_attribute(self, name):
+        return self.id if name == "id" else None
+
+    def is_checked(self):
+        return self.checked
+
+    def check(self):
+        self.checked = True
+
+
+class _ReflectionFormPage:
+    """Just enough of ManageBac's form#new_evidence to drive selection logic.
+
+    The outcomes are real checkboxes with full IB sentences as labels, which is
+    why matching has to work on a fragment.
+    """
+
+    OUTCOMES = {
+        "evidence_learning_outcome_ids_260850": "Undertake challenges that develop new skills",
+        "evidence_learning_outcome_ids_260852": "Persevere in action",
+        "evidence_learning_outcome_ids_260853": "Working collaboratively with others",
+    }
+
+    def __init__(self):
+        self.boxes = [_Checkbox(i) for i in self.OUTCOMES]
+        self.clicked_tiles: list[str] = []
+        self.evidence_type = "JournalEvidence"
+
+    class _List:
+        def __init__(self, items):
+            self.items = items
+
+        def count(self):
+            return len(self.items)
+
+        def nth(self, i):
+            return self.items[i]
+
+        @property
+        def first(self):
+            return self.items[0]
+
+    def locator(self, selector: str):
+        if "checkbox" in selector:
+            return self._List(self.boxes)
+        if selector.startswith("label[for="):
+            box_id = selector.split("'")[1]
+            return self._List([_Label(self.OUTCOMES[box_id])])
+        if "f-tile--link" in selector:
+            kind = selector.split("'")[1]
+            page = self
+
+            class _Tile:
+                def count(self_inner):
+                    return 1 if kind in ("journal", "file", "video", "website", "photos") else 0
+
+                @property
+                def first(self_inner):
+                    return self_inner
+
+                def click(self_inner):
+                    page.clicked_tiles.append(kind)
+                    page.evidence_type = {
+                        "journal": "JournalEvidence", "file": "FileEvidence",
+                        "video": "YoutubeEvidence", "website": "WebsiteEvidence",
+                        "photos": "AlbumEvidence",
+                    }[kind]
+
+            return _Tile()
+        if selector == "input#evidence_type":
+            page = self
+
+            class _Hidden:
+                @property
+                def first(self_inner):
+                    return self_inner
+
+                def get_attribute(self_inner, name):
+                    return page.evidence_type
+
+            return _Hidden()
+        raise AssertionError(f"unexpected selector {selector}")
+
+    def goto(self, url, timeout=None):
+        self.url = url
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+class _Label:
+    def __init__(self, text):
+        self.text = text
+
+    def inner_text(self):
+        return self.text
+
+
+def test_outcomes_are_matched_against_their_real_labels():
+    """A caller passes a fragment; the labels are full IB sentences."""
+    gw = _gateway_with_artifacts("unused")
+    page = _ReflectionFormPage()
+
+    chosen = gw._select_outcomes(page, ["persevere", "new skills"])
+
+    assert chosen["outcomes_selected"] == [
+        "Persevere in action",
+        "Undertake challenges that develop new skills",
+    ]
+    assert chosen["outcomes_unmatched"] == []
+    assert [b.id for b in page.boxes if b.checked] == [
+        "evidence_learning_outcome_ids_260850",
+        "evidence_learning_outcome_ids_260852",
+    ]
+
+
+def test_an_outcome_that_matches_nothing_is_reported_not_swallowed():
+    gw = _gateway_with_artifacts("unused")
+    page = _ReflectionFormPage()
+
+    chosen = gw._select_outcomes(page, ["Persevere", "Kindness to badgers"])
+
+    assert chosen["outcomes_selected"] == ["Persevere in action"]
+    assert chosen["outcomes_unmatched"] == ["Kindness to badgers"]
+    assert len(chosen["outcomes_available"]) == 3
+
+
+def test_the_reflection_form_is_opened_by_url_and_the_tile_is_verified():
+    """Clicking "Add Reflections & Evidence" hits a hidden dropdown item first,
+    so the form is reached by its own URL instead."""
+    gw = _gateway_with_artifacts("unused")
+    page = _ReflectionFormPage()
+
+    gw._open_reflection_form(page, 26692255, "website")
+
+    assert page.url.endswith("/student/ib/activity/cas/26692255/reflections/new")
+    assert page.clicked_tiles == ["website"]
+    assert page.evidence_type == "WebsiteEvidence"
+
+
+def test_a_reflection_kind_managebac_does_not_offer_is_refused():
+    from managebac_mcp.errors import AppError
+
+    gw = _gateway_with_artifacts("unused")
+    page = _ReflectionFormPage()
+
+    with pytest.raises(AppError) as exc:
+        gw._open_reflection_form(page, 26692255, "interpretive_dance")
+    assert "no 'interpretive_dance' reflection" in str(exc.value)

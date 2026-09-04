@@ -583,7 +583,7 @@ class ActionService:
                 data={"tasks": mine, "tasks_total": count, "class_id": class_id},
             )
 
-    def submit_task_file(self, task_id: int, file_path: str, comment: str | None = None) -> ToolResult:
+    def submit_task_file(self, task_id: int, file_path: str) -> ToolResult:
         p = Path(file_path)
         with self.db.session() as session:
             task_repo = TaskRepository(session)
@@ -591,7 +591,7 @@ class ActionService:
             task = task_repo.get(task_id)
             if task is None:
                 return ToolResult(success=False, message=f"Task {task_id} not found", error_code=TASK_NOT_FOUND)
-            outcome = self.browser.submit_task_file(task.dropbox_url, p, comment=comment)
+            outcome = self.browser.submit_task_file(task.dropbox_url, p)
             sub_repo.create(task_id=task_id, file_name=p.name, result_status=outcome.status, message=outcome.message, artifact_path=outcome.screenshot_path)
             SnapshotRepository(session).create(
                 page_type="task_dropbox",
@@ -615,7 +615,7 @@ class ActionService:
                 artifacts=ToolArtifacts(screenshot=outcome.screenshot_path, html=outcome.html_path),
             )
 
-    def submit_task_content(self, task_id: int, file_name: str, content_base64: str, comment: str | None = None) -> ToolResult:
+    def submit_task_content(self, task_id: int, file_name: str, content_base64: str) -> ToolResult:
         """Submit a dropbox file from inline base64 content.
 
         The connector runs on a server with no access to the caller's filesystem,
@@ -638,7 +638,7 @@ class ActionService:
         tmp_path = tmp_dir / safe_name
         try:
             tmp_path.write_bytes(raw)
-            return self.submit_task_file(task_id=task_id, file_path=str(tmp_path), comment=comment)
+            return self.submit_task_file(task_id=task_id, file_path=str(tmp_path))
         finally:
             try:
                 tmp_path.unlink()
@@ -727,6 +727,15 @@ class ActionService:
             data = self.browser.add_cas_reflection_file(experience_id, Path(file_path), outcomes)
             repo.create_reflection(experience_id, "file", Path(file_path).name, data.get("html"))
             return ToolResult(success=True, message="CAS file reflection submitted", data=data)
+
+    def add_reflection_photo(self, experience_id: int, file_path: str, caption: str | None, outcomes: list[str]) -> ToolResult:
+        with self.db.session() as session:
+            repo = CasRepository(session)
+            if repo.get_experience(experience_id) is None:
+                return ToolResult(success=False, message=f"CAS experience {experience_id} not found", error_code=CAS_EXPERIENCE_NOT_FOUND)
+            data = self.browser.add_cas_reflection_photo(experience_id, Path(file_path), caption, outcomes)
+            repo.create_reflection(experience_id, "photos", Path(file_path).name, data.get("html"))
+            return ToolResult(success=True, message="CAS photo reflection submitted", data=data)
 
     def add_reflection_link(self, experience_id: int, reflection_type: str, url: str, outcomes: list[str]) -> ToolResult:
         with self.db.session() as session:
