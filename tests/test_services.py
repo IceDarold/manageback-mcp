@@ -724,3 +724,52 @@ def test_class_refresh_stores_every_class_it_crawled():
     with db.session() as session:
         other = TaskRepository(session).get(47417931 + 12816551)
         assert other.title == "Task for 12816551"  # refreshed, not left stale
+
+
+def test_agenda_tomorrow_and_month_views():
+    from managebac_mcp.repositories import ClassRepository, TaskRepository
+
+    db = build_db()
+    read = ReadService(db)
+    now = datetime(2026, 9, 10, 12, 0)  # Thursday
+
+    with db.session() as session:
+        ClassRepository(session).upsert_many(
+            [ClassRecord(class_id=100, title="Maths", teacher="A", url="u", raw_hash="h")]
+        )
+        TaskRepository(session).upsert_many([
+            TaskRecord(task_id=1, class_id=100, title="Later today", due_at=datetime(2026, 9, 10, 18, 0),
+                       status=None, url="u", dropbox_url="d", raw_hash="r"),
+            TaskRecord(task_id=2, class_id=100, title="Tomorrow early", due_at=datetime(2026, 9, 11, 8, 40),
+                       status=None, url="u", dropbox_url="d", raw_hash="r"),
+            TaskRecord(task_id=3, class_id=100, title="Tomorrow late", due_at=datetime(2026, 9, 11, 23, 0),
+                       status=None, url="u", dropbox_url="d", raw_hash="r"),
+            TaskRecord(task_id=4, class_id=100, title="In three weeks", due_at=datetime(2026, 10, 1, 9, 0),
+                       status=None, url="u", dropbox_url="d", raw_hash="r"),
+            TaskRecord(task_id=5, class_id=100, title="In two months", due_at=datetime(2026, 11, 20, 9, 0),
+                       status=None, url="u", dropbox_url="d", raw_hash="r"),
+        ])
+
+    assert [t["task_id"] for t in read.agenda(view="today", now=now).data["tasks"]] == [1]
+    # A whole calendar day, not a rolling 24 hours.
+    assert [t["task_id"] for t in read.agenda(view="tomorrow", now=now).data["tasks"]] == [2, 3]
+    assert [t["task_id"] for t in read.agenda(view="week", now=now).data["tasks"]] == [1, 2, 3]
+    assert [t["task_id"] for t in read.agenda(view="month", now=now).data["tasks"]] == [1, 2, 3, 4]
+    assert [t["task_id"] for t in read.agenda(view="upcoming", now=now).data["tasks"]] == [1, 2, 3, 4, 5]
+
+
+def test_school_clock_is_used_not_the_server_clock():
+    """Deadlines are the school's wall time, so "now" must be too."""
+    from datetime import timedelta
+
+    from managebac_mcp.clock import DEFAULT_TIMEZONE, school_now
+
+    assert DEFAULT_TIMEZONE == "Europe/Nicosia"
+
+    nicosia = school_now("Europe/Nicosia")
+    tehran = school_now("Asia/Tehran")  # what this server's own clock reads
+    assert nicosia.tzinfo is None  # naive, matching how due dates are stored
+    assert abs((tehran - nicosia) - timedelta(minutes=30)) < timedelta(seconds=5)
+
+    # An unusable zone must degrade rather than take the connector down.
+    assert abs(school_now("Not/AZone") - nicosia) < timedelta(seconds=5)

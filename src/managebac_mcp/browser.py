@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Protocol, TypeVar
 
 from .config import ManageBacConfig
+from .clock import DEFAULT_TIMEZONE, school_now
 from .errors import (
     AppError,
     AUTH_FAILED,
@@ -123,6 +124,9 @@ class PlaywrightBrowserGateway:
     # page, whose tiles carry the due date and submission status.
     _DEADLINE_VIEWS = ("upcoming", "overdue", "past")
 
+    def _now(self) -> datetime:
+        return school_now(getattr(self.config, "timezone", DEFAULT_TIMEZONE))
+
     @staticmethod
     def _parse_due(
         text: str, now: "datetime | None" = None, direction: "str | None" = None
@@ -198,7 +202,7 @@ class PlaywrightBrowserGateway:
                     task_id=task_id,
                     class_id=class_id,
                     title=title,
-                    due_at=self._parse_due(due_text, direction=direction),
+                    due_at=self._parse_due(due_text, now=self._now(), direction=direction),
                     status=status,
                     url=self.config.build_url(href),
                     dropbox_url=dropbox_url,

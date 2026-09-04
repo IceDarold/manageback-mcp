@@ -46,6 +46,10 @@ class FeatureConfig(BaseModel):
 
 class ManageBacConfig(BaseModel):
     base_url: str
+    # Due times are scraped as the school's wall clock ("8:40 AM"), so every
+    # comparison against "now" has to happen in the school's zone -- the server
+    # sits in a different one.
+    timezone: str = "Europe/Nicosia"
     auth: AuthConfig
     routes: RoutesConfig
     timeouts_ms: TimeoutConfig = Field(default_factory=TimeoutConfig)

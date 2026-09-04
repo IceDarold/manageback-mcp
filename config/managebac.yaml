@@ -1,4 +1,5 @@
 base_url: "https://theislandprivateschool.managebac.com"
+timezone: "Europe/Nicosia"
 
 auth:
   login_url: "/login"

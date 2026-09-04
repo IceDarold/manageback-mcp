@@ -38,9 +38,9 @@ def create_services() -> tuple[Settings, Database, SyncService, ReadService, Act
     db.create_all()
 
     browser = PlaywrightBrowserGateway(cfg)
-    sync_service = SyncService(db, browser)
-    read_service = ReadService(db)
-    action_service = ActionService(db, browser)
+    sync_service = SyncService(db, browser, cfg.timezone)
+    read_service = ReadService(db, cfg.timezone)
+    action_service = ActionService(db, browser, cfg.timezone)
     return settings, db, sync_service, read_service, action_service
 
 
@@ -135,10 +135,17 @@ def create_mcp_server():
         date in ISO plus human phrasing ("in 3 days" / "overdue by 2 hours"), and status —
         so no per-class or id lookups are needed.
 
-        view: "upcoming" (default, future deadlines), "overdue", "today", "week" (next 7 days),
-        or "all". within_days=N overrides view with a rolling N-day forward window. subject is a
-        case-insensitive class-name filter (e.g. "math"). Data is auto-refreshed when older than
-        max_age_minutes (default 15; pass None to read cache only, or 0 to force a refresh).
+        view: "upcoming" (default, every future deadline), "overdue", "today",
+        "tomorrow", "week" (next 7 days), "month" (next 30 days), or "all".
+        "today"/"tomorrow" are calendar days on the school's own clock; "week"
+        and "month" are rolling windows from now. within_days=N overrides view
+        with a rolling N-day window. subject is a case-insensitive class-name
+        filter (e.g. "math"). Data is auto-refreshed when older than
+        max_age_minutes (default 15; pass None to read cache only, or 0 to force
+        a refresh).
+
+        An empty list means there are genuinely no deadlines in that window --
+        ManageBac's own upcoming view is empty when teachers have not set work.
         """
         if _is_stale(read_service.tasks_last_seen_any(), max_age_minutes):
             sync_service.refresh_deadlines()

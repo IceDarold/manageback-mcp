@@ -6,6 +6,7 @@ from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 
 from .browser import BrowserGateway
+from .clock import DEFAULT_TIMEZONE, school_now
 from .db import Database
 from .errors import AppError, CAS_EXPERIENCE_NOT_FOUND, CLASS_NOT_FOUND, INVALID_INPUT, TASK_NOT_FOUND
 from .repositories import CasRepository, ClassRepository, LessonRepository, SnapshotRepository, SubmissionRepository, SyncRunRepository, TaskRepository
@@ -32,9 +33,10 @@ def _relative_due(due: datetime | None, now: datetime) -> str | None:
 
 
 class SyncService:
-    def __init__(self, db: Database, browser: BrowserGateway):
+    def __init__(self, db: Database, browser: BrowserGateway, timezone: str = DEFAULT_TIMEZONE):
         self.db = db
         self.browser = browser
+        self.timezone = timezone
 
     def run_startup_sync(self) -> ToolResult:
         with self.db.session() as session:
@@ -95,7 +97,7 @@ class SyncService:
         task. The batch is capped to stay inside a caller's timeout; running it
         again picks up where it left off, oldest-unchecked first.
         """
-        now = now or datetime.now()
+        now = now or school_now(self.timezone)
         with self.db.session() as session:
             repo = TaskRepository(session)
             targets = [(t.task_id, t.url, t.title) for t in repo.list_for_grading(max(1, limit), now)]
@@ -157,8 +159,9 @@ class SyncService:
 
 
 class ReadService:
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, timezone: str = DEFAULT_TIMEZONE):
         self.db = db
+        self.timezone = timezone
 
     def auth_status(self) -> ToolResult:
         return ToolResult(success=True, message="Auth status can be validated by running action_login", data={})
@@ -232,7 +235,7 @@ class ReadService:
 
     def schedule(self, date: str | None = None, days: int = 1, now: datetime | None = None) -> ToolResult:
         """Lessons for a date window, each already joined to its class and deadlines."""
-        now = now or datetime.now()
+        now = now or school_now(self.timezone)
         start = date_cls.fromisoformat(date) if date else now.date()
         end = start + timedelta(days=max(1, days) - 1)
 
@@ -293,11 +296,13 @@ class ReadService:
     ) -> ToolResult:
         """Cross-class deadline list, sorted by due date, with class names and human due phrasing.
 
-        view: upcoming (due in the future), overdue (past due), today, week (next 7 days),
-        all (everything). When within_days is given it overrides view with a forward window.
+        view: upcoming (due in the future), overdue (past due), today, tomorrow,
+        week (next 7 days), month (next 30 days), all (everything). today and
+        tomorrow are calendar days on the school's clock; week and month are
+        rolling windows from now. When within_days is given it overrides view.
         subject is a case-insensitive substring match on the class name.
         """
-        now = now or datetime.utcnow()
+        now = now or school_now(self.timezone)
         rows: list[dict] = []
         with self.db.session() as session:
             class_map = {c.class_id: c.title for c in ClassRepository(session).list_all()}
@@ -316,8 +321,14 @@ class ReadService:
                 elif view == "today":
                     if due is None or due.date() != now.date():
                         continue
+                elif view == "tomorrow":
+                    if due is None or due.date() != (now + timedelta(days=1)).date():
+                        continue
                 elif view == "week":
                     if due is None or due < now or due > now + timedelta(days=7):
+                        continue
+                elif view == "month":
+                    if due is None or due < now or due > now + timedelta(days=30):
                         continue
                 elif view == "upcoming":
                     if due is None or due < now:
@@ -540,9 +551,10 @@ class ReadService:
 
 
 class ActionService:
-    def __init__(self, db: Database, browser: BrowserGateway):
+    def __init__(self, db: Database, browser: BrowserGateway, timezone: str = DEFAULT_TIMEZONE):
         self.db = db
         self.browser = browser
+        self.timezone = timezone
 
     def login(self, username: str, password: str) -> ToolResult:
         self.browser.login(username, password)
