@@ -612,9 +612,25 @@ class PlaywrightBrowserGateway:
         """
 
         def _run(page):
+            import pathlib as _pl
+            _d = _pl.Path("/var/lib/manageback-mcp/probe"); _d.mkdir(parents=True, exist_ok=True)
+            _got = []
+            for _name, _url in (
+                ("cas_index", self.config.route_url("cas_index")),
+                ("cas_new", self.config.build_url("/student/ib/activity/cas/new")),
+            ):
+                try:
+                    page.goto(_url, timeout=self.config.timeouts_ms.navigation)
+                    page.wait_for_timeout(2000)
+                    (_d / f"{_name}.html").write_text(page.content(), encoding="utf-8")
+                    _got.append(f"{_name}:{page.url}")
+                except Exception as exc:
+                    _got.append(f"{_name}:FAILED {exc!r}"[:160])
+
             page.goto(task_dropbox_url, timeout=self.config.timeouts_ms.navigation)
             body = page.inner_text("body")
             return {
+                "probe": _got,
                 "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
                 "upload_button_found": self._first_locator(page, self._selectors("dropbox_upload_button")) is not None,
                 "page_text": body[:700],
