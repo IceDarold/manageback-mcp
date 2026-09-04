@@ -39,9 +39,15 @@ selectors:
   task_links:
     - "a[href*='/core_tasks/']"
   dropbox_file_input:
+    - "form.edit_dropbox input[type='file']"
     - "input[type='file']"
+  # ManageBac renders the upload control as <input type="submit" value="Upload
+  # Files">, which has no inner text, so a button:has-text selector matches
+  # nothing at all and every submission died on the click. Verified against a
+  # live dropbox page.
   dropbox_upload_button:
-    - "button:has-text('Upload Files')"
+    - "form.edit_dropbox input[type='submit'][name='commit']"
+    - "input[type='submit'][value='Upload Files']"
   cas_add_experience:
     - "a:has-text('Add CAS Experience')"
     - "button:has-text('Add CAS Experience')"

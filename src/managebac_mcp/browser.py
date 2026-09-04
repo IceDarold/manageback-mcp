@@ -612,10 +612,6 @@ class PlaywrightBrowserGateway:
         def _run(page):
             page.goto(task_dropbox_url, timeout=self.config.timeouts_ms.navigation)
             body = page.inner_text("body")
-            import pathlib as _pl
-            _d = _pl.Path("/var/lib/manageback-mcp/probe")
-            _d.mkdir(parents=True, exist_ok=True)
-            (_d / "dropbox.html").write_text(page.content(), encoding="utf-8")
             return {
                 "file_input_found": self._first_locator(page, self._selectors("dropbox_file_input")) is not None,
                 "upload_button_found": self._first_locator(page, self._selectors("dropbox_upload_button")) is not None,

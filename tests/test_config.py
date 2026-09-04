@@ -59,3 +59,17 @@ routes:
     cfg = load_managebac_config(cfg_path)
     with pytest.raises(AppError):
         cfg.route_url("task_page", class_id=1)
+
+
+def test_the_dropbox_upload_control_is_targeted_as_an_input():
+    """ManageBac's upload control is <input type="submit" value="Upload Files">.
+
+    It carries no inner text, so a "button:has-text('Upload Files')" selector --
+    which is what shipped -- matches nothing and every submission failed on the
+    click. Keep at least one selector that targets the real element.
+    """
+    config = load_managebac_config(Path("config/managebac.yaml"))
+    selectors = config.selectors["dropbox_upload_button"]
+
+    assert any("input[type='submit']" in s for s in selectors)
+    assert not all("has-text" in s for s in selectors)
