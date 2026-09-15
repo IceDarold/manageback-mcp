@@ -26,7 +26,7 @@ def main() -> None:
         print(result.to_dict())
         return
 
-    mcp = create_mcp_server()
+    mcp = create_mcp_server(managed_http=args.transport == "streamable-http")
     if args.transport == "stdio":
         mcp.run(transport="stdio")
     else:

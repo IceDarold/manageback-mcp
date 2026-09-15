@@ -44,16 +44,24 @@ def create_services() -> tuple[Settings, Database, SyncService, ReadService, Act
     return settings, db, sync_service, read_service, action_service
 
 
-def create_mcp_server():
+def create_mcp_server(*, managed_http: bool = False):
     try:
         from mcp.server.fastmcp import FastMCP
     except Exception as exc:
         raise RuntimeError("`mcp` package is required. Install with `pip install .[server]`") from exc
 
-    settings, _, sync_service, read_service, action_service = create_services()
-    cfg = load_managebac_config(settings.managebac_config_path)
-
-    mcp = FastMCP("managebac-student-mcp")
+    managed = None
+    if managed_http:
+        from .managed import ManagedAccounts, ServiceProxy
+        settings = Settings()
+        managed = ManagedAccounts(settings)
+        cfg = managed.config
+        mcp = managed.mcp()
+        sync_service, read_service, action_service = (ServiceProxy(managed, i) for i in (1, 2, 3))
+    else:
+        settings, _, sync_service, read_service, action_service = create_services()
+        cfg = load_managebac_config(settings.managebac_config_path)
+        mcp = FastMCP("managebac-student-mcp")
     from mcp.types import ToolAnnotations
     _RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
     _WR = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
@@ -65,6 +73,8 @@ def create_mcp_server():
         whole lookup is guarded: no request (e.g. startup sync) yields no
         credentials rather than an error.
         """
+        if managed is not None:
+            return managed.credentials()
         try:
             request = mcp.get_context().request_context.request
             if request is None:
@@ -75,29 +85,45 @@ def create_mcp_server():
 
     set_resolver(_request_credentials)
 
-    if cfg.features.startup_sync:
+    if cfg.features.startup_sync and managed is None:
         sync_service.run_startup_sync()
 
-    @mcp.tool(name="whoami", annotations=_RO)
+    # HTTP tools receive only an opaque optional account ID, never a password.
+    tool = (lambda **options: managed.tool(mcp, **options)) if managed else mcp.tool
+
+    @tool(name="whoami", annotations=_RO)
     def whoami() -> dict[str, Any]:
         """Verify the supplied credentials by logging in; used as the connection identity."""
         username, password = require_credentials(cfg)
-        action_service.login(username, password)
+        result = action_service.login(username, password)
+        if not result.success:
+            from .errors import AppError
+            raise AppError(result.error_code or "AUTH_FAILED", "Не удалось подтвердить вход в ManageBac.")
+        if managed is not None:
+            from .managed import selected_account
+            account = selected_account.get()
+            return {"id": account["id"], "name": account["label"], "email": username, "verified": True}
         return {"id": username, "name": username, "verified": True}
 
-    @mcp.tool(name="read_auth_status", annotations=_RO)
+    if managed is not None:
+        @mcp.tool(name="list_accounts", annotations=_RO)
+        def list_accounts() -> dict[str, Any]:
+            """List connected school accounts. Pass an opaque account ID as account_id to other tools; omitting it uses the primary account."""
+            return managed.vault.public()
+
+    @tool(name="read_auth_status", annotations=_RO)
     def read_auth_status() -> dict[str, Any]:
         """Report whether the connection is usable. Cheap; does not log in."""
         return _serialize(read_service.auth_status())
 
-    @mcp.tool(name="action_login", annotations=_RO)
+    @tool(name="action_login", annotations=_RO)
     def action_login() -> dict[str, Any]:
         """Force a ManageBac login to check the stored credentials. Rarely needed --
         every other tool logs in on its own when it has to."""
         username, password = require_credentials(cfg)
         return _serialize(action_service.login(username, password))
 
-    @mcp.tool(name="action_startup_sync", annotations=_WR)
+    @tool(name="action_startup_sync", annotations=_WR)
     def action_startup_sync() -> dict[str, Any]:
         """Re-scrape everything (classes, all tasks, CAS, this week's and next week's
         lessons) in one login and refill the cache.
@@ -111,7 +137,7 @@ def create_mcp_server():
         """
         return _serialize(sync_service.run_startup_sync())
 
-    @mcp.tool(name="read_classes", annotations=_RO)
+    @tool(name="read_classes", annotations=_RO)
     def read_classes(max_age_minutes: int | None = None) -> dict[str, Any]:
         """List the student's classes (id, title, teacher, url).
 
@@ -122,7 +148,7 @@ def create_mcp_server():
             action_service.refresh_classes()
         return _serialize(read_service.list_classes())
 
-    @mcp.tool(name="read_agenda", annotations=_RO)
+    @tool(name="read_agenda", annotations=_RO)
     def read_agenda(
         view: str = "upcoming",
         within_days: int | None = None,
@@ -151,7 +177,7 @@ def create_mcp_server():
             sync_service.refresh_deadlines()
         return _serialize(read_service.agenda(view=view, within_days=within_days, subject=subject))
 
-    @mcp.tool(name="read_grades", annotations=_RO)
+    @tool(name="read_grades", annotations=_RO)
     def read_grades(subject: str | None = None) -> dict[str, Any]:
         """Marks recorded so far, newest first, plus an average per class.
 
@@ -165,7 +191,7 @@ def create_mcp_server():
         """
         return _serialize(read_service.grades(subject=subject))
 
-    @mcp.tool(name="action_refresh_grades", annotations=_WR)
+    @tool(name="action_refresh_grades", annotations=_WR)
     def action_refresh_grades(limit: int = 15) -> dict[str, Any]:
         """Check a batch of past tasks for marks and record what is found.
 
@@ -175,7 +201,7 @@ def create_mcp_server():
         """
         return _serialize(sync_service.refresh_grades(limit=min(max(1, limit), 25)))
 
-    @mcp.tool(name="read_schedule", annotations=_RO)
+    @tool(name="read_schedule", annotations=_RO)
     def read_schedule(
         date: str | None = None,
         days: int = 1,
@@ -208,24 +234,24 @@ def create_mcp_server():
             sync_service.refresh_timetable(start_date=window_start.isoformat(), weeks=weeks)
         return _serialize(read_service.schedule(date=date, days=days))
 
-    @mcp.tool(name="action_refresh_timetable", annotations=_WR)
+    @tool(name="action_refresh_timetable", annotations=_WR)
     def action_refresh_timetable(start_date: str | None = None, weeks: int = 2) -> dict[str, Any]:
         """Force a re-scrape of the timetable. Advanced: read_schedule(max_age_minutes=0)
         does the same thing and returns the data."""
         return _serialize(sync_service.refresh_timetable(start_date=start_date, weeks=weeks))
 
-    @mcp.tool(name="action_refresh_classes", annotations=_WR)
+    @tool(name="action_refresh_classes", annotations=_WR)
     def action_refresh_classes() -> dict[str, Any]:
         """Force a re-scrape of the class list. Advanced: read_classes(max_age_minutes=0)
         does the same thing and returns the data."""
         return _serialize(action_service.refresh_classes())
 
-    @mcp.tool(name="read_class_details", annotations=_RO)
+    @tool(name="read_class_details", annotations=_RO)
     def read_class_details(class_id: int) -> dict[str, Any]:
         """Return one class's title, teacher and url, by class id (see read_classes)."""
         return _serialize(read_service.class_details(class_id))
 
-    @mcp.tool(name="read_class_tasks", annotations=_RO)
+    @tool(name="read_class_tasks", annotations=_RO)
     def read_class_tasks(class_id: int, max_age_minutes: int | None = None) -> dict[str, Any]:
         """Tasks for ONE class, sorted by due date, from the cache.
 
@@ -237,13 +263,13 @@ def create_mcp_server():
             action_service.refresh_class_tasks(class_id)
         return _serialize(read_service.class_tasks(class_id))
 
-    @mcp.tool(name="action_refresh_class_tasks", annotations=_WR)
+    @tool(name="action_refresh_class_tasks", annotations=_WR)
     def action_refresh_class_tasks(class_id: int) -> dict[str, Any]:
         """Force a re-scrape of one class's tasks. Advanced: prefer
         read_class_tasks(class_id, max_age_minutes=0), which also returns the data."""
         return _serialize(action_service.refresh_class_tasks(class_id))
 
-    @mcp.tool(name="read_task", annotations=_RO)
+    @tool(name="read_task", annotations=_RO)
     def read_task(task_id: int) -> dict[str, Any]:
         """Cached facts about one task: title, class, due date, status, urls.
 
@@ -251,7 +277,7 @@ def create_mcp_server():
         """
         return _serialize(read_service.task_details(task_id))
 
-    @mcp.tool(name="read_task_details", annotations=_RO)
+    @tool(name="read_task_details", annotations=_RO)
     def read_task_details(task_id: int) -> dict[str, Any]:
         """Open one task's page and return what the student actually has to do.
 
@@ -264,13 +290,13 @@ def create_mcp_server():
         """
         return _serialize(action_service.task_details_live(task_id))
 
-    @mcp.tool(name="read_task_dropbox", annotations=_RO)
+    @tool(name="read_task_dropbox", annotations=_RO)
     def read_task_dropbox(task_id: int) -> dict[str, Any]:
         """Return the dropbox (submission) URL for a task. The submit tools use it
         automatically, so you rarely need this directly."""
         return _serialize(read_service.task_dropbox(task_id))
 
-    @mcp.tool(name="read_submission_readiness", annotations=_RO)
+    @tool(name="read_submission_readiness", annotations=_RO)
     def read_submission_readiness(task_id: int) -> dict[str, Any]:
         """Check a task's dropbox before submitting to it, without uploading anything.
 
@@ -281,12 +307,12 @@ def create_mcp_server():
         """
         return _serialize(action_service.submission_readiness(task_id))
 
-    @mcp.tool(name="action_submit_task_file", annotations=_WR)
+    @tool(name="action_submit_task_file", annotations=_WR)
     def action_submit_task_file(task_id: int, file_path: str) -> dict[str, Any]:
         """Submit a local file to a task's dropbox by server-side path (CLI/local use)."""
         return _serialize(action_service.submit_task_file(task_id=task_id, file_path=file_path))
 
-    @mcp.tool(name="action_submit_task_content", annotations=_WR)
+    @tool(name="action_submit_task_content", annotations=_WR)
     def action_submit_task_content(task_id: int, file_name: str, content_base64: str) -> dict[str, Any]:
         """Submit a file to a task's dropbox from inline base64 content.
 
@@ -299,18 +325,18 @@ def create_mcp_server():
             action_service.submit_task_content(task_id=task_id, file_name=file_name, content_base64=content_base64)
         )
 
-    @mcp.tool(name="read_submission_result", annotations=_RO)
+    @tool(name="read_submission_result", annotations=_RO)
     def read_submission_result(task_id: int) -> dict[str, Any]:
         """Return the most recent submission this connector made for a task
         (file name, time, resulting status). Use it to confirm an upload landed."""
         return _serialize(read_service.submission_result(task_id))
 
-    @mcp.tool(name="action_retry_submission", annotations=_WR)
+    @tool(name="action_retry_submission", annotations=_WR)
     def action_retry_submission(task_id: int, file_path: str) -> dict[str, Any]:
         """Re-upload a file to a task's dropbox after a failed attempt (server-side path)."""
         return _serialize(action_service.retry_submission(task_id=task_id, file_path=file_path))
 
-    @mcp.tool(name="read_cas_dashboard", annotations=_RO)
+    @tool(name="read_cas_dashboard", annotations=_RO)
     def read_cas_dashboard(max_age_minutes: int | None = None) -> dict[str, Any]:
         """All CAS experiences with approval status, hours, and start/end dates.
 
@@ -321,18 +347,18 @@ def create_mcp_server():
             action_service.refresh_cas()
         return _serialize(read_service.cas_dashboard())
 
-    @mcp.tool(name="action_refresh_cas", annotations=_WR)
+    @tool(name="action_refresh_cas", annotations=_WR)
     def action_refresh_cas() -> dict[str, Any]:
         """Force a re-scrape of CAS. Advanced: prefer
         read_cas_dashboard(max_age_minutes=0), which also returns the data."""
         return _serialize(action_service.refresh_cas())
 
-    @mcp.tool(name="read_cas_experience", annotations=_RO)
+    @tool(name="read_cas_experience", annotations=_RO)
     def read_cas_experience(experience_id: int) -> dict[str, Any]:
         """One CAS experience by id: title, status, hours, dates (see read_cas_dashboard)."""
         return _serialize(read_service.cas_experience(experience_id))
 
-    @mcp.tool(name="action_create_cas_experience", annotations=_WR)
+    @tool(name="action_create_cas_experience", annotations=_WR)
     def action_create_cas_experience(payload: dict[str, Any]) -> dict[str, Any]:
         """Create a CAS experience.
 
@@ -343,12 +369,12 @@ def create_mcp_server():
         """
         return _serialize(action_service.create_cas_experience(payload))
 
-    @mcp.tool(name="read_cas_reflections", annotations=_RO)
+    @tool(name="read_cas_reflections", annotations=_RO)
     def read_cas_reflections(experience_id: int) -> dict[str, Any]:
         """Reflections this connector has added to a CAS experience."""
         return _serialize(read_service.cas_reflections(experience_id))
 
-    @mcp.tool(name="action_add_reflection_journal", annotations=_WR)
+    @tool(name="action_add_reflection_journal", annotations=_WR)
     def action_add_reflection_journal(experience_id: int, text: str, outcomes: list[str]) -> dict[str, Any]:
         """Add a written journal reflection to a CAS experience.
 
@@ -362,26 +388,26 @@ def create_mcp_server():
         """
         return _serialize(action_service.add_reflection_journal(experience_id=experience_id, text=text, outcomes=outcomes))
 
-    @mcp.tool(name="action_add_reflection_file", annotations=_WR)
+    @tool(name="action_add_reflection_file", annotations=_WR)
     def action_add_reflection_file(experience_id: int, file_path: str, outcomes: list[str]) -> dict[str, Any]:
         """Attach a file as evidence to a CAS experience (server-side path)."""
         return _serialize(action_service.add_reflection_file(experience_id=experience_id, file_path=file_path, outcomes=outcomes))
 
-    @mcp.tool(name="action_add_reflection_video", annotations=_WR)
+    @tool(name="action_add_reflection_video", annotations=_WR)
     def action_add_reflection_video(experience_id: int, video_url: str, outcomes: list[str]) -> dict[str, Any]:
         """Attach a video URL as evidence to a CAS experience."""
         return _serialize(
             action_service.add_reflection_link(experience_id=experience_id, reflection_type="video", url=video_url, outcomes=outcomes)
         )
 
-    @mcp.tool(name="action_add_reflection_website", annotations=_WR)
+    @tool(name="action_add_reflection_website", annotations=_WR)
     def action_add_reflection_website(experience_id: int, website_url: str, outcomes: list[str]) -> dict[str, Any]:
         """Attach a website URL as evidence to a CAS experience."""
         return _serialize(
             action_service.add_reflection_link(experience_id=experience_id, reflection_type="website", url=website_url, outcomes=outcomes)
         )
 
-    @mcp.tool(name="action_add_reflection_photos", annotations=_WR)
+    @tool(name="action_add_reflection_photos", annotations=_WR)
     def action_add_reflection_photos(experience_id: int, file_path: str, caption: str | None = None, outcomes: list[str] | None = None) -> dict[str, Any]:
         """Attach a photo as evidence to a CAS experience (server-side path).
 

@@ -1,0 +1,31 @@
+[Unit]
+Description=ManageBac MCP server and external account portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lifeos-platform
+Group=lifeos-platform
+WorkingDirectory=/opt/manageback-mcp
+EnvironmentFile=/etc/manageback-mcp/manageback.env
+EnvironmentFile=/etc/manageback-mcp/auth.env
+ExecStart=/opt/manageback-mcp/.venv/bin/python -m managebac_mcp.main --transport streamable-http --host 127.0.0.1 --port 8134
+Restart=on-failure
+RestartSec=5
+MemoryHigh=1200M
+MemoryMax=1500M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/manageback-mcp
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

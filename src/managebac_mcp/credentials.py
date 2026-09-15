@@ -1,11 +1,9 @@
 """Per-request ManageBac credential resolution.
 
-Credentials no longer live in the process environment. Life OS (or any MCP
-client) supplies them per request as an HTTP ``Authorization: Basic`` header,
-which the connection flow collects through its encrypted login form. This
-module extracts those credentials from the current request and exposes them to
-the browser gateway. An environment fallback is kept only for the ``--sync-only``
-CLI and local development.
+HTTP credentials live in the MCP server's encrypted account vault. Life OS and
+other clients supply only resource-scoped OAuth tokens and opaque account IDs.
+Environment credentials are supported only when no request resolver is active
+(the sync-only CLI and local development).
 """
 
 from __future__ import annotations
@@ -65,6 +63,7 @@ def require_credentials(config) -> Credentials:
         creds = _resolver()
         if creds and creds[0] and creds[1]:
             return creds
+        raise AppError(AUTH_MISSING_CREDENTIALS, "Подключите аккаунт на managebac.archik.tech.")
     username = os.getenv(config.auth.username_env)
     password = os.getenv(config.auth.password_env)
     if username and password:
