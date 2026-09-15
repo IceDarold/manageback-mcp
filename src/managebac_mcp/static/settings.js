@@ -8,7 +8,7 @@ try {
   const url = new URL(returnTo);
   if (url.origin === "https://mcp.archik.tech" && url.pathname.startsWith("/connections/") && !url.username && !url.password) {
     q("return").href = url.href;
-    q("return").textContent = "Продолжить в Life OS";
+    q("return").textContent = "Готово";
   }
 } catch (_) { /* Direct visits use the normal Life OS link. */ }
 
