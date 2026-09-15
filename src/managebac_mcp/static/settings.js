@@ -2,6 +2,7 @@
 const q = id => document.getElementById(id);
 let state = {accounts: [], default_id: null};
 let busy = false;
+let deletingAccountId = null;
 const returnTo = new URLSearchParams(location.search).get("return_to");
 try {
   const url = new URL(returnTo);
@@ -40,13 +41,15 @@ function button(label, handler, className = "") {
   result.onclick = handler;
   return result;
 }
-async function mutate(path, options, success) {
+async function mutate(path, options, success, accountId = null) {
   if (busy) return;
   busy = true;
+  deletingAccountId = accountId;
+  if (accountId) message("Удаляем аккаунт…");
   render();
   try { state = {...state, ...await api(path, options)}; message(success); }
   catch (error) { message(error.message, true); }
-  finally { busy = false; render(); }
+  finally { busy = false; deletingAccountId = null; render(); }
 }
 function render() {
   const list = q("list");
@@ -60,6 +63,7 @@ function render() {
   }
   for (const account of state.accounts) {
     const row = document.createElement("div"); row.className = "row";
+    row.setAttribute("aria-busy", String(deletingAccountId === account.id));
     const info = document.createElement("div"); info.className = "info";
     const title = document.createElement("strong"); title.textContent = account.label;
     if (account.id === state.default_id) {
@@ -70,9 +74,9 @@ function render() {
     const actions = document.createElement("div"); actions.className = "actions";
     if (account.id !== state.default_id) actions.append(button("Сделать основным", () => mutate("/settings/api/default", {method: "POST", body: JSON.stringify({id: account.id})}, "Основной аккаунт изменён")));
     actions.append(button("Переподключить", () => edit(account)));
-    actions.append(button("Удалить", () => {
+    actions.append(button(deletingAccountId === account.id ? "Удаляем…" : "Удалить", () => {
       if (confirm(`Удалить аккаунт «${account.label}»? Его пароль и локальные учебные данные будут удалены с сервера. Данные в ManageBac останутся без изменений.`)) {
-        mutate("/settings/api/accounts/" + encodeURIComponent(account.id), {method: "DELETE"}, "Аккаунт удалён");
+        mutate("/settings/api/accounts/" + encodeURIComponent(account.id), {method: "DELETE"}, "Аккаунт удалён", account.id);
       }
     }, "danger"));
     row.append(info, actions); list.append(row);
