@@ -8,7 +8,6 @@ Environment credentials are supported only when no request resolver is active
 
 from __future__ import annotations
 
-import base64
 import os
 from typing import Callable, Optional, Tuple
 
@@ -29,34 +28,11 @@ def set_resolver(resolver: Optional[Resolver]) -> None:
     _resolver = resolver
 
 
-def parse_basic_auth(header: Optional[str]) -> Optional[Credentials]:
-    """Return ``(username, password)`` from an ``Authorization: Basic`` header."""
-
-    if not header:
-        return None
-    try:
-        scheme, value = header.split(" ", 1)
-    except ValueError:
-        return None
-    if scheme.lower() != "basic":
-        return None
-    try:
-        raw = base64.b64decode(value).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return None
-    if ":" not in raw:
-        return None
-    username, password = raw.split(":", 1)
-    if not username or not password:
-        return None
-    return username, password
-
-
 def require_credentials(config) -> Credentials:
     """Resolve credentials for the current request, or raise ``AppError``.
 
-    Order: the registered request resolver first (Life OS Basic auth), then the
-    environment variables named in the ManageBac config (CLI/local fallback).
+    Use the server-side request resolver in HTTP mode. Environment variables
+    are consulted only when no resolver is registered (CLI/local mode).
     """
 
     if _resolver is not None:

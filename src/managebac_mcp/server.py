@@ -6,7 +6,7 @@ from datetime import date as _date, datetime, timedelta
 from typing import Any
 
 from .config import Settings, load_managebac_config
-from .credentials import parse_basic_auth, require_credentials, set_resolver
+from .credentials import require_credentials, set_resolver
 from .db import Database
 from .services import ActionService, ReadService, SyncService
 from .types import ToolResult
@@ -66,24 +66,7 @@ def create_mcp_server(*, managed_http: bool = False):
     _RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
     _WR = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 
-    def _request_credentials():
-        """Read the current request's Basic-auth ManageBac credentials.
-
-        Accessing the request context outside of a live request raises, so the
-        whole lookup is guarded: no request (e.g. startup sync) yields no
-        credentials rather than an error.
-        """
-        if managed is not None:
-            return managed.credentials()
-        try:
-            request = mcp.get_context().request_context.request
-            if request is None:
-                return None
-            return parse_basic_auth(request.headers.get("authorization"))
-        except Exception:
-            return None
-
-    set_resolver(_request_credentials)
+    set_resolver(managed.credentials if managed is not None else None)
 
     if cfg.features.startup_sync and managed is None:
         sync_service.run_startup_sync()

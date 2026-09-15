@@ -87,6 +87,14 @@ def test_http_resolver_never_falls_back_to_environment(monkeypatch):
         set_resolver(None)
 
 
+def test_standalone_credentials_still_work_without_request_resolver(monkeypatch):
+    monkeypatch.setenv("CLI_LOGIN", "local-student")
+    monkeypatch.setenv("CLI_PASSWORD", "local-secret")
+    set_resolver(None)
+    config = SimpleNamespace(auth=SimpleNamespace(username_env="CLI_LOGIN", password_env="CLI_PASSWORD"))
+    assert require_credentials(config) == ("local-student", "local-secret")
+
+
 def test_settings_authentication_and_csrf(managed):
     assert managed.deny(request(managed, cookie=False)).status_code == 401
     assert managed.deny(request(managed)) is None
