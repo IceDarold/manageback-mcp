@@ -199,7 +199,7 @@ class ManagedAccounts:
 
     def tool(self, mcp, **options):
         def decorate(function):
-            signature = inspect.signature(function)
+            signature = inspect.signature(function, eval_str=True)
             parameters = list(signature.parameters.values()) + [inspect.Parameter(
                 "account_id", inspect.Parameter.KEYWORD_ONLY, default=None, annotation=str | None)]
             @functools.wraps(function)

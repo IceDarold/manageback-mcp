@@ -5,11 +5,22 @@ from __future__ import annotations
 from datetime import date as _date, datetime, timedelta
 from typing import Any
 
+from pydantic import BaseModel
+
 from .config import Settings, load_managebac_config
 from .credentials import require_credentials, set_resolver
 from .db import Database
 from .services import ActionService, ReadService, SyncService
 from .types import ToolResult
+
+
+class ConnectionIdentity(BaseModel):
+    """Stable MCP identity: fields must not be wrapped in a generic result envelope."""
+
+    id: str
+    name: str
+    email: str | None = None
+    verified: bool
 
 
 def _serialize(result: ToolResult) -> dict[str, Any]:
@@ -75,7 +86,7 @@ def create_mcp_server(*, managed_http: bool = False):
     tool = (lambda **options: managed.tool(mcp, **options)) if managed else mcp.tool
 
     @tool(name="whoami", annotations=_RO)
-    def whoami() -> dict[str, Any]:
+    def whoami() -> ConnectionIdentity:
         """Verify the supplied credentials by logging in; used as the connection identity."""
         username, password = require_credentials(cfg)
         result = action_service.login(username, password)
@@ -85,8 +96,8 @@ def create_mcp_server(*, managed_http: bool = False):
         if managed is not None:
             from .managed import selected_account
             account = selected_account.get()
-            return {"id": account["id"], "name": account["label"], "email": username, "verified": True}
-        return {"id": username, "name": username, "verified": True}
+            return ConnectionIdentity(id=account["id"], name=account["label"], email=username, verified=True)
+        return ConnectionIdentity(id=username, name=username, verified=True)
 
     if managed is not None:
         @mcp.tool(name="list_accounts", annotations=_RO)
