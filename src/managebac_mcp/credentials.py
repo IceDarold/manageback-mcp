@@ -39,7 +39,7 @@ def require_credentials(config) -> Credentials:
         creds = _resolver()
         if creds and creds[0] and creds[1]:
             return creds
-        raise AppError(AUTH_MISSING_CREDENTIALS, "Подключите аккаунт на managebac.archik.tech.")
+        raise AppError(AUTH_MISSING_CREDENTIALS, "Connect an account on managebac.archik.tech.")
     username = os.getenv(config.auth.username_env)
     password = os.getenv(config.auth.password_env)
     if username and password:

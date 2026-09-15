@@ -46,7 +46,7 @@ def school_url(value: str) -> str:
     if (parsed.scheme != "https" or not host.endswith(".managebac.com")
         or parsed.username or parsed.password or parsed.port or parsed.query
         or parsed.fragment or parsed.path not in ("", "/")):
-        raise ValueError("Укажите адрес школы: https://school.managebac.com")
+        raise ValueError("Enter your school address: https://school.managebac.com")
     return f"https://{host}"
 
 
@@ -98,7 +98,7 @@ class AccountVault:
             identifier = identifier or state["default_id"]
             account = next((a for a in state["accounts"] if a["id"] == identifier), None)
             if not account:
-                raise AppError("AUTH_MISSING_CREDENTIALS", "Подключите аккаунт на managebac.archik.tech.")
+                raise AppError("AUTH_MISSING_CREDENTIALS", "Connect an account on managebac.archik.tech.")
             return dict(account)
 
     def save(self, account: dict) -> dict:
@@ -107,7 +107,7 @@ class AccountVault:
             identifier = account.get("id") or secrets.token_hex(16)
             existing = next((a for a in state["accounts"] if a["id"] == identifier), None)
             if account.get("id") and not existing:
-                raise ValueError("Аккаунт не найден")
+                raise ValueError("Account not found")
             entry = dict(account, id=identifier, verified_at=int(time.time()))
             state["accounts"] = [a for a in state["accounts"] if a["id"] != identifier] + [entry]
             state["default_id"] = state["default_id"] or identifier
@@ -118,7 +118,7 @@ class AccountVault:
         with self.lock:
             state = self.read()
             if not any(a["id"] == identifier for a in state["accounts"]):
-                raise ValueError("Аккаунт не найден")
+                raise ValueError("Account not found")
             if remove:
                 state["accounts"] = [a for a in state["accounts"] if a["id"] != identifier]
                 if state["default_id"] == identifier:
@@ -182,7 +182,7 @@ class ManagedAccounts:
     def services(self):
         account = selected_account.get()
         if account is None:
-            raise AppError("AUTH_MISSING_CREDENTIALS", "Выберите подключённый аккаунт.")
+            raise AppError("AUTH_MISSING_CREDENTIALS", "Choose a connected account.")
         key = account["id"]
         with self.lock:
             if key not in self.cache:
@@ -206,7 +206,7 @@ class ManagedAccounts:
             async def wrapper(*args, **kwargs):
                 token = get_access_token()
                 if token is None or token.subject != "owner":
-                    raise AppError("AUTH_REQUIRED", "Авторизация обязательна.")
+                    raise AppError("AUTH_REQUIRED", "Authorization required.")
                 account = self.vault.account(kwargs.pop("account_id", None))
                 marker = selected_account.set(account)
                 try:
@@ -259,9 +259,9 @@ class ManagedAccounts:
 
     def deny(self, request, *, mutation=False):
         if not self.valid(request):
-            return JSONResponse({"error": "Войдите, чтобы управлять аккаунтами"}, status_code=401)
+            return JSONResponse({"error": "Sign in to manage accounts"}, status_code=401)
         if mutation and request.headers.get("origin") != self.origin:
-            return JSONResponse({"error": "Недопустимый источник запроса"}, status_code=403)
+            return JSONResponse({"error": "Invalid request origin"}, status_code=403)
         return None
 
     @staticmethod
@@ -294,7 +294,7 @@ class ManagedAccounts:
             if parsed.scheme or parsed.netloc or not destination.startswith("/settings") or "\\" in destination:
                 destination = "/settings"
         except (httpx.HTTPError, ValueError):
-            return HTMLResponse("Ссылка входа истекла. Откройте настройки заново.", status_code=403, headers=self.headers())
+            return HTMLResponse("Sign-in link expired. Open settings again.", status_code=403, headers=self.headers())
         result = RedirectResponse(destination, status_code=303, headers=self.headers())
         result.set_cookie(COOKIE, self.cookie(), secure=True, httponly=True, samesite="lax", path="/", max_age=86400)
         return result
@@ -308,16 +308,16 @@ class ManagedAccounts:
         try:
             body = await request.json()
             if not isinstance(body, dict):
-                raise ValueError("Некорректный запрос")
+                raise ValueError("Invalid request")
             identifier = str(body.get("id") or "")
             existing = self.vault.account(identifier) if identifier else None
             username = str(body.get("username") or "").strip()
             password = str(body.get("password") or (existing or {}).get("password") or "")
             school = school_url(str(body.get("school") or self.config.base_url))
             if not username or not password or len(username) > 254 or len(password) > 1024:
-                raise ValueError("Введите логин и пароль ManageBac")
+                raise ValueError("Enter username and password ManageBac")
             if existing and (school != existing["school"] or username != existing["username"]):
-                raise ValueError("Для другого аккаунта или школы используйте «Добавить аккаунт»")
+                raise ValueError("For another account or school, use Add account»")
             from .browser import PlaywrightBrowserGateway
             browser = PlaywrightBrowserGateway(self.config.model_copy(update={"base_url": school}), self.root / "auth-artifacts")
             await anyio.to_thread.run_sync(browser.login, username, password)
@@ -325,12 +325,12 @@ class ManagedAccounts:
                 "school": school, "label": str(body.get("label") or username).strip()[:80]})
             return JSONResponse(self.vault.public(), headers=self.headers())
         except (AppError, ValueError, TypeError) as exc:
-            message = "Не удалось войти в ManageBac. Проверьте логин и пароль." if isinstance(exc, AppError) else str(exc)
+            message = "Unable to sign in to ManageBac. Check your username and password." if isinstance(exc, AppError) else str(exc)
             return JSONResponse({"error": message}, status_code=400, headers=self.headers())
 
     def remove_account(self, identifier):
         if not re.fullmatch(r"[0-9a-f]{32}", identifier):
-            raise ValueError("Некорректный идентификатор аккаунта")
+            raise ValueError("Invalid account identifier")
         try:
             self.vault.change(identifier, remove=True)
         except ValueError:

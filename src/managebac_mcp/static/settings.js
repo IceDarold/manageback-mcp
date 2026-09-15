@@ -8,14 +8,14 @@ try {
   const url = new URL(returnTo);
   if (url.origin === "https://mcp.archik.tech" && url.pathname.startsWith("/connections/") && !url.username && !url.password) {
     q("return").href = url.href;
-    q("return").textContent = "Готово";
+    q("return").textContent = "Done";
   }
 } catch (_) { /* Direct visits use the normal Life OS link. */ }
 
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers: {"Content-Type": "application/json"}});
   const value = await response.json();
-  if (!response.ok) throw Error(value.error || "Не удалось выполнить запрос");
+  if (!response.ok) throw Error(value.error || "Unable to complete the request");
   return value;
 }
 function message(text, error = false) {
@@ -29,7 +29,7 @@ function edit(account) {
   q("username").value = account?.username || "";
   q("school").value = account?.school || state.school || "";
   q("password").required = true;
-  q("form-title").textContent = account ? "Переподключить аккаунт" : "Добавить аккаунт";
+  q("form-title").textContent = account ? "Reconnect account" : "Add account";
   q("form-status").textContent = "";
   q("dialog").showModal();
 }
@@ -45,7 +45,7 @@ async function mutate(path, options, success, accountId = null) {
   if (busy) return;
   busy = true;
   deletingAccountId = accountId;
-  if (accountId) message("Удаляем аккаунт…");
+  if (accountId) message("Deleting account…");
   render();
   try { state = {...state, ...await api(path, options)}; message(success); }
   catch (error) { message(error.message, true); }
@@ -58,7 +58,7 @@ function render() {
   if (!state.accounts.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "Пока нет аккаунтов. Добавьте школьный аккаунт, чтобы агент получил доступ к заданиям и расписанию.";
+    empty.textContent = "No accounts yet. Add a school account to give the agent access to assignments and schedules.";
     list.append(empty);
   }
   for (const account of state.accounts) {
@@ -67,16 +67,16 @@ function render() {
     const info = document.createElement("div"); info.className = "info";
     const title = document.createElement("strong"); title.textContent = account.label;
     if (account.id === state.default_id) {
-      const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = "Основной"; title.append(badge);
+      const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = "Default"; title.append(badge);
     }
     const details = document.createElement("small"); details.textContent = account.username + " · " + new URL(account.school).hostname;
     info.append(title, details);
     const actions = document.createElement("div"); actions.className = "actions";
-    if (account.id !== state.default_id) actions.append(button("Сделать основным", () => mutate("/settings/api/default", {method: "POST", body: JSON.stringify({id: account.id})}, "Основной аккаунт изменён")));
-    actions.append(button("Переподключить", () => edit(account)));
-    actions.append(button(deletingAccountId === account.id ? "Удаляем…" : "Удалить", () => {
-      if (confirm(`Удалить аккаунт «${account.label}»? Его пароль и локальные учебные данные будут удалены с сервера. Данные в ManageBac останутся без изменений.`)) {
-        mutate("/settings/api/accounts/" + encodeURIComponent(account.id), {method: "DELETE"}, "Аккаунт удалён", account.id);
+    if (account.id !== state.default_id) actions.append(button("Set as default", () => mutate("/settings/api/default", {method: "POST", body: JSON.stringify({id: account.id})}, "Default account updated")));
+    actions.append(button("Reconnect", () => edit(account)));
+    actions.append(button(deletingAccountId === account.id ? "Deleting…" : "Delete", () => {
+      if (confirm(`Delete account «${account.label}»? Its password and local school data will be deleted from this server. Data in ManageBac will remain unchanged.`)) {
+        mutate("/settings/api/accounts/" + encodeURIComponent(account.id), {method: "DELETE"}, "Account deleted", account.id);
       }
     }, "danger"));
     row.append(info, actions); list.append(row);
@@ -91,13 +91,13 @@ q("form").onsubmit = async event => {
   busy = true;
   q("save").disabled = q("cancel").disabled = true;
   q("form-status").className = "status";
-  q("form-status").textContent = "Проверяем вход в школу… Это может занять до минуты.";
+  q("form-status").textContent = "Checking school sign-in… This may take up to a minute.";
   try {
     const payload = Object.fromEntries(["label", "school", "username", "password"].map(id => [id, q(id).value]));
     if (q("account-id").value) payload.id = q("account-id").value;
     state = {...state, ...await api("/settings/api/accounts", {method: "POST", body: JSON.stringify(payload)})};
     q("dialog").close();
-    message("Аккаунт подключён. Продолжите в Life OS, чтобы проверить доступ и загрузить инструменты.");
+    message("Account connected. Continue in Life OS, to verify access and load tools.");
   } catch (error) {
     q("form-status").className = "status error";
     q("form-status").textContent = error.message;

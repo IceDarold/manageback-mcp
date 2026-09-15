@@ -92,7 +92,7 @@ def create_mcp_server(*, managed_http: bool = False):
         result = action_service.login(username, password)
         if not result.success:
             from .errors import AppError
-            raise AppError(result.error_code or "AUTH_FAILED", "Не удалось подтвердить вход в ManageBac.")
+            raise AppError(result.error_code or "AUTH_FAILED", "Unable to verify sign-in to ManageBac.")
         if managed is not None:
             from .managed import selected_account
             account = selected_account.get()
